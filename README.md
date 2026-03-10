@@ -7,6 +7,7 @@
 - 支持 `/v1/chat/completions` 端點
 - 支持串流與非串流回應
 - 自動取得與刷新 Merlin Bearer token
+- 使用 `.env` 中的 `PROXY_API_KEY` 保護 proxy 入口
 - 自動處理 Merlin API 所需的 UUID 與格式轉換
 
 ## 安裝步驟
@@ -24,7 +25,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-4. 編輯 `.env`，填入你的 Merlin 帳號密碼
+4. 編輯 `.env`，填入你的 Merlin 帳號密碼與 proxy API key
 
 ## 執行方式
 
@@ -36,9 +37,12 @@ python main.py
 
 ## 使用範例
 
+呼叫 proxy 時要帶你自己的 proxy API key：
+
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-123" \
   -d '{
     "model": "claude-4.6-sonnet",
     "messages": [{"role": "user", "content": "你好！"}],
@@ -52,6 +56,7 @@ curl http://localhost:8000/v1/chat/completions \
 - `MERLIN_PASSWORD`: Merlin 登入密碼
 - `MERLIN_FIREBASE_API_KEY`: Firebase Web API key
 - `MERLIN_VERSION`: 轉發時使用的 Merlin version header
+- `PROXY_API_KEY`: 你的 proxy 對外要求的 API key
 
 ## 如何找到 `MERLIN_FIREBASE_API_KEY`
 

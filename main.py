@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -26,6 +26,7 @@ FIREBASE_API_KEY = os.getenv("MERLIN_FIREBASE_API_KEY", "AIzaSyAvCgtQ4XbmlQGIynD
 MERLIN_EMAIL = os.getenv("MERLIN_EMAIL")
 MERLIN_PASSWORD = os.getenv("MERLIN_PASSWORD")
 MERLIN_VERSION = os.getenv("MERLIN_VERSION", "iframe-merlin-7.5.19")
+PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-123")
 TOKEN_REFRESH_BUFFER_SECONDS = 60
 
 
@@ -130,6 +131,12 @@ class MerlinTokenManager:
 token_manager = MerlinTokenManager()
 
 
+def verify_proxy_api_key(authorization: Optional[str]) -> None:
+    expected_header = f"Bearer {PROXY_API_KEY}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=401, detail="Invalid or missing proxy API key")
+
+
 def get_headers() -> Dict[str, str]:
     now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+08:00[Asia/Taipei]"
@@ -198,7 +205,8 @@ def merlin_stream_generator(merlin_payload: Dict[str, Any]):
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: OpenAIRequest):
+async def chat_completions(request: OpenAIRequest, authorization: Optional[str] = Header(default=None)):
+    verify_proxy_api_key(authorization)
     user_msg = [m["content"] for m in request.messages if m["role"] == "user"][-1]
 
     merlin_payload = {
@@ -270,7 +278,8 @@ async def chat_completions(request: OpenAIRequest):
 
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models(authorization: Optional[str] = Header(default=None)):
+    verify_proxy_api_key(authorization)
     models = [
         "gpt-5.4",
         "gemini-3.1-flash-lite",
