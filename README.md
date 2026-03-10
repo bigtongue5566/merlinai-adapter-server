@@ -1,0 +1,60 @@
+# Merlin to OpenAI API Proxy
+
+這個專案提供一個 FastAPI 代理伺服器，將 OpenAI 格式的請求轉換成 Merlin API 格式，並自動用 Firebase 帳密換取 Bearer token。
+
+## 功能
+
+- 支持 `/v1/chat/completions` 端點
+- 支持串流與非串流回應
+- 自動取得與刷新 Merlin Bearer token
+- 自動處理 Merlin API 所需的 UUID 與格式轉換
+
+## 安裝步驟
+
+1. 確保已安裝 Python 3.8+
+2. 安裝依賴套件
+
+```bash
+pip install -r requirements.txt
+```
+
+3. 建立環境變數檔
+
+```bash
+copy .env.example .env
+```
+
+4. 編輯 `.env`，填入你的 Merlin 帳號密碼
+
+## 執行方式
+
+```bash
+python main.py
+```
+
+伺服器將在 `http://0.0.0.0:8000` 啟動。
+
+## 使用範例
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-4.6-sonnet",
+    "messages": [{"role": "user", "content": "你好！"}],
+    "stream": true
+  }'
+```
+
+## 環境變數
+
+- `MERLIN_EMAIL`: Merlin 登入信箱
+- `MERLIN_PASSWORD`: Merlin 登入密碼
+- `MERLIN_FIREBASE_API_KEY`: Firebase Web API key
+- `MERLIN_VERSION`: 轉發時使用的 Merlin version header
+
+## 注意事項
+
+- `.env` 已加入 `.gitignore`，避免把帳密提交進版本庫
+- `model` 參數會直接傳給 Merlin，請使用 Merlin 支持的模型名稱
+- 若 Merlin 改變串流格式，可能需要調整 `merlin_stream_generator` 的解析邏輯

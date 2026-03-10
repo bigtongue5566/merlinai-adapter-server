@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
+
+# Local debug artifacts
+.playwright-cli/
+ps_output.debug
