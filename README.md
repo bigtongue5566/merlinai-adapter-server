@@ -53,6 +53,41 @@ curl http://localhost:8000/v1/chat/completions \
 - `MERLIN_FIREBASE_API_KEY`: Firebase Web API key
 - `MERLIN_VERSION`: 轉發時使用的 Merlin version header
 
+## 如何找到 `MERLIN_FIREBASE_API_KEY`
+
+最直接的方法是從 Merlin Web 登入流程的 network request 取得。
+
+1. 打開瀏覽器進入 `https://extension.getmerlin.in`
+2. 開啟 DevTools 的 Network 分頁
+3. 執行登入流程
+4. 找這個請求：
+
+```text
+https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=...
+```
+
+5. URL 裡 `key=` 後面的值就是 `MERLIN_FIREBASE_API_KEY`
+
+例如：
+
+```text
+https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyAvCgtQ4XbmlQGIynDT-v_M8eLaXrKmtiM
+```
+
+這裡的：
+
+```text
+AIzaSyAvCgtQ4XbmlQGIynDT-v_M8eLaXrKmtiM
+```
+
+就是要填進 `.env` 的 `MERLIN_FIREBASE_API_KEY`。
+
+補充：
+
+- 這個值通常是 Merlin 前端所屬 Firebase 專案的 Web API key
+- 它通常比帳號密碼穩定很多，但 Merlin 若改 Firebase 專案或更換前端設定，這個值仍可能改變
+- 如果登入突然失效，可以先重新抓一次這個 key
+
 ## 注意事項
 
 - `.env` 已加入 `.gitignore`，避免把帳密提交進版本庫
