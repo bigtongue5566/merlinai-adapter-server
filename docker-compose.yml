@@ -1,0 +1,11 @@
+services:
+  merlinai-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: merlinai-proxy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

@@ -9,6 +9,7 @@
 - 自動取得與刷新 Merlin Bearer token
 - 使用 `.env` 中的 `PROXY_API_KEY` 保護 proxy 入口
 - 自動處理 Merlin API 所需的 UUID 與格式轉換
+- 可用 Docker Compose 啟動
 
 ## 安裝步驟
 
@@ -27,13 +28,39 @@ copy .env.example .env
 
 4. 編輯 `.env`，填入你的 Merlin 帳號密碼與 proxy API key
 
-## 執行方式
+## 本機執行
 
 ```bash
 python main.py
 ```
 
 伺服器將在 `http://0.0.0.0:8000` 啟動。
+
+## Docker Compose
+
+建立好 `.env` 後，直接執行：
+
+```bash
+docker compose up --build -d
+```
+
+查看 logs：
+
+```bash
+docker compose logs -f
+```
+
+停止服務：
+
+```bash
+docker compose down
+```
+
+啟動後服務會在：
+
+```text
+http://localhost:8000
+```
 
 ## 使用範例
 

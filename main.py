@@ -5,12 +5,12 @@ import os
 import threading
 import urllib.parse
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 load_dotenv()
 
@@ -30,9 +30,27 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-123")
 TOKEN_REFRESH_BUFFER_SECONDS = 60
 
 
+class ContentPart(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    type: Optional[str] = None
+    text: Optional[str] = None
+    input_text: Optional[str] = None
+    content: Optional[str] = None
+
+
+class Message(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    role: str
+    content: Optional[Union[str, List[Union[ContentPart, Dict[str, Any], str]]]] = None
+
+
 class OpenAIRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     model: str
-    messages: List[Dict[str, str]]
+    messages: List[Message]
     stream: Optional[bool] = False
 
 
@@ -137,6 +155,41 @@ def verify_proxy_api_key(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing proxy API key")
 
 
+def extract_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+
+            if isinstance(item, BaseModel):
+                item = item.model_dump(exclude_none=True)
+
+            if isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("input_text"), str):
+                    parts.append(item["input_text"])
+                elif item.get("type") == "text" and isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+        return "".join(parts)
+
+    return ""
+
+
+def get_last_user_message(messages: List[Message]) -> str:
+    for message in reversed(messages):
+        if message.role == "user":
+            text = extract_message_text(message.content)
+            if text:
+                return text
+    raise HTTPException(status_code=400, detail="No user message content found")
+
+
 def get_headers() -> Dict[str, str]:
     now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+08:00[Asia/Taipei]"
@@ -207,7 +260,7 @@ def merlin_stream_generator(merlin_payload: Dict[str, Any]):
 @app.post("/v1/chat/completions")
 async def chat_completions(request: OpenAIRequest, authorization: Optional[str] = Header(default=None)):
     verify_proxy_api_key(authorization)
-    user_msg = [m["content"] for m in request.messages if m["role"] == "user"][-1]
+    user_msg = get_last_user_message(request.messages)
 
     merlin_payload = {
         "attachments": [],
