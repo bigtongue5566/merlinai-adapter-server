@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from .logging_config import log_debug_payload
 from .message_utils import extract_message_text
 from .schemas import OpenAIRequest
-from .tool_payload_parser import filter_allowed_tool_calls, resolve_payload_result, try_parse_structured_payloads
+from .tool_payload_parser import filter_allowed_tool_calls, resolve_payload_result, try_parse_payload_candidates
 from .tool_prompt import get_allowed_tool_names, normalize_tool_choice, should_force_tool_json
 
 
@@ -66,7 +66,12 @@ def _validate_response_mode(
     finish_reason: str,
 ) -> None:
     required_tool_call = normalize_tool_choice(request.tool_choice)
-    if force_tool_json and not all_tool_calls and selected_message_content is None:
+    if (
+        force_tool_json
+        and required_tool_call in {"required"}
+        and not all_tool_calls
+        and selected_message_content is None
+    ):
         raise HTTPException(
             status_code=422,
             detail="Tool mode was enabled, but upstream did not return a valid structured JSON payload.",
@@ -86,12 +91,14 @@ def _validate_response_mode(
 def build_openai_response(request: OpenAIRequest, full_content: str, response_tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     force_tool_json = should_force_tool_json(request)
     allowed_tool_names = get_allowed_tool_names(request)
-    parsed_payloads = try_parse_structured_payloads(full_content) if force_tool_json else []
+    parsed_payloads = try_parse_payload_candidates(full_content) if force_tool_json else []
     payload_tool_calls, selected_message_content = (
         resolve_payload_result(full_content, allowed_tool_names) if force_tool_json else ([], None)
     )
     filtered_response_tool_calls = filter_allowed_tool_calls(response_tool_calls, allowed_tool_names)
     all_tool_calls = filtered_response_tool_calls or payload_tool_calls
+    if selected_message_content is None and not all_tool_calls:
+        selected_message_content = full_content or None
     if force_tool_json:
         log_debug_payload(
             "structured_payload_resolution",

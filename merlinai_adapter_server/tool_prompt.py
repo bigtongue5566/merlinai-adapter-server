@@ -4,7 +4,15 @@ from typing import Any, Dict, List, Optional, Set, Union
 from fastapi import HTTPException
 
 from .config import TOOL_DESCRIPTION_MAX_CHARS, TOOL_MESSAGE_MAX_CHARS
-from .message_utils import build_conversation_transcript, get_last_user_message, select_tool_prompt_messages, trim_text
+from .message_utils import (
+    build_conversation_transcript,
+    count_recent_tool_interactions,
+    get_last_user_message,
+    has_recent_tool_interaction,
+    last_message_is_tool_result,
+    select_tool_prompt_messages,
+    trim_text,
+)
 from .protocol_constants import STRUCTURED_PAYLOAD_END, STRUCTURED_PAYLOAD_START, ToolPromptMode
 from .schemas import OpenAIRequest
 
@@ -126,6 +134,49 @@ def get_allowed_tool_names(request: OpenAIRequest) -> Set[str]:
     return allowed_names
 
 
+def _count_complex_tool_schemas(tools: Optional[List[Dict[str, Any]]]) -> int:
+    count = 0
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        function_payload = tool.get("function")
+        if not isinstance(function_payload, dict):
+            continue
+        parameters = function_payload.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+
+        properties = parameters.get("properties")
+        if isinstance(properties, dict) and properties:
+            count += 1
+            continue
+
+        required = parameters.get("required")
+        if isinstance(required, list) and required:
+            count += 1
+
+    return count
+
+
+def is_agent_like_tool_context(request: OpenAIRequest) -> bool:
+    if not request.tools:
+        return False
+
+    score = 0
+    if has_recent_tool_interaction(request.messages):
+        score += 2
+    if count_recent_tool_interactions(request.messages) >= 2:
+        score += 1
+    if last_message_is_tool_result(request.messages):
+        score += 2
+    if len(request.tools) >= 4:
+        score += 1
+    if _count_complex_tool_schemas(request.tools) >= 3:
+        score += 1
+
+    return score >= 4
+
+
 def _build_tool_prompt_instructions(mode: ToolPromptMode, tool_choice: str) -> List[str]:
     payload_schema = (
         '{"type":"tool_calls","tool_calls":[{"name":"tool_name","arguments":{}}]} '
@@ -157,6 +208,19 @@ def _build_tool_prompt_instructions(mode: ToolPromptMode, tool_choice: str) -> L
             "Do not explain or apologize.",
             f"Allowed JSON schema: {payload_schema}",
             f"Output must start with {STRUCTURED_PAYLOAD_START} and end with {STRUCTURED_PAYLOAD_END}.",
+        ]
+
+    if mode == "strict":
+        return [
+            "Return exactly one payload block and nothing else.",
+            f"Block format: {STRUCTURED_PAYLOAD_START}{payload_schema}{STRUCTURED_PAYLOAD_END}",
+            f"tool_choice={tool_choice}",
+            "Use tool_calls whenever an available tool can continue the workflow.",
+            "If the conversation is already in a tool workflow, prefer tool_calls over message.",
+            "Use message only when no available tool can advance the conversation.",
+            "Every tool_calls.name must exactly match a tool name from Tools.",
+            "arguments must be a JSON object.",
+            "No markdown. No explanation outside the payload block.",
         ]
 
     return base_instructions

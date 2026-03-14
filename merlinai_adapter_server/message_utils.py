@@ -109,3 +109,35 @@ def build_conversation_transcript(messages: List[Message]) -> str:
         if text:
             transcript_parts.append(f"{message.role.upper()}: {trim_text(text, TOOL_MESSAGE_MAX_CHARS)}")
     return "\n\n".join(transcript_parts)
+
+
+def has_recent_tool_interaction(messages: List[Message], window: int = 6) -> bool:
+    recent_messages = messages[-window:] if window > 0 else messages
+    for message in recent_messages:
+        if message.role == "tool":
+            return True
+        if message.tool_call_id:
+            return True
+        if message.role == "assistant" and message.tool_calls:
+            return True
+    return False
+
+
+def count_recent_tool_interactions(messages: List[Message], window: int = 8) -> int:
+    recent_messages = messages[-window:] if window > 0 else messages
+    count = 0
+    for message in recent_messages:
+        if message.role == "tool":
+            count += 1
+        elif message.role == "assistant" and message.tool_calls:
+            count += 1
+        elif message.tool_call_id:
+            count += 1
+    return count
+
+
+def last_message_is_tool_result(messages: List[Message]) -> bool:
+    if not messages:
+        return False
+    last_message = messages[-1]
+    return last_message.role == "tool" or bool(last_message.tool_call_id)

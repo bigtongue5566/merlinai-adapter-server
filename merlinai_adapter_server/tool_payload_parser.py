@@ -30,13 +30,87 @@ def extract_structured_payload_blocks(raw_text: str) -> List[str]:
 def try_parse_structured_payloads(raw_text: str) -> List[Dict[str, Any]]:
     parsed_objects: List[Dict[str, Any]] = []
     for block in extract_structured_payload_blocks(raw_text):
+        parsed = _try_parse_json_object(block)
+        if isinstance(parsed, dict):
+            parsed_objects.append(parsed)
+    return parsed_objects
+
+
+def _try_parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw_text, str):
+        return None
+
+    candidate = raw_text.strip()
+    if not candidate:
+        return None
+
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
         try:
-            parsed = json.loads(block)
-        except json.JSONDecodeError:
-            try:
-                parsed = repair_json(block, return_objects=True)
-            except Exception:
-                parsed = None
+            parsed = repair_json(candidate, return_objects=True)
+        except Exception:
+            parsed = None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_fenced_json_blocks(raw_text: str) -> List[str]:
+    if not raw_text:
+        return []
+
+    pattern = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+    return [match.group(1).strip() for match in pattern.finditer(raw_text) if match.group(1).strip()]
+
+
+def _extract_braced_json_candidates(raw_text: str) -> List[str]:
+    if not raw_text:
+        return []
+
+    candidates: List[str] = []
+    stack = 0
+    start_index: Optional[int] = None
+
+    for index, char in enumerate(raw_text):
+        if char == "{":
+            if stack == 0:
+                start_index = index
+            stack += 1
+        elif char == "}":
+            if stack == 0:
+                continue
+            stack -= 1
+            if stack == 0 and start_index is not None:
+                candidate = raw_text[start_index : index + 1].strip()
+                if candidate:
+                    candidates.append(candidate)
+                start_index = None
+
+    return candidates
+
+
+def try_parse_payload_candidates(raw_text: str) -> List[Dict[str, Any]]:
+    candidates: List[str] = []
+    seen: Set[str] = set()
+
+    def add_candidate(candidate: str) -> None:
+        normalized = candidate.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    for block in extract_structured_payload_blocks(raw_text):
+        add_candidate(block)
+    for block in _extract_fenced_json_blocks(raw_text):
+        add_candidate(block)
+    for block in _extract_braced_json_candidates(raw_text):
+        add_candidate(block)
+    add_candidate(raw_text)
+
+    parsed_objects: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        parsed = _try_parse_json_object(candidate)
         if isinstance(parsed, dict):
             parsed_objects.append(parsed)
     return parsed_objects
@@ -121,11 +195,57 @@ def extract_tool_calls_from_json_payload(
     return normalized
 
 
+def extract_single_tool_call_from_json_payload(
+    payload: Optional[Dict[str, Any]], allowed_tool_names: Optional[Set[str]] = None
+) -> List[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+
+    function_payload = payload.get("function")
+    if not isinstance(function_payload, dict):
+        return []
+
+    name = function_payload.get("name") or payload.get("name")
+    arguments = function_payload.get("arguments", payload.get("arguments", {}))
+    if not isinstance(name, str) or not name:
+        return []
+    if allowed_tool_names is not None and name not in allowed_tool_names:
+        return []
+
+    if isinstance(arguments, str):
+        try:
+            parsed_arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            try:
+                parsed_arguments = repair_json(arguments, return_objects=True)
+            except Exception:
+                parsed_arguments = None
+        arguments = parsed_arguments
+
+    if not isinstance(arguments, dict):
+        return []
+
+    return [
+        {
+            "id": payload.get("id") or f"call_{uuid.uuid4().hex}",
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            },
+        }
+    ]
+
+
 def _extract_message_content_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
 
     if payload.get("type") == "message" and isinstance(payload.get("content"), str):
+        return payload["content"]
+    if isinstance(payload.get("message"), str):
+        return payload["message"]
+    if payload.get("type") in {None, "assistant"} and isinstance(payload.get("content"), str):
         return payload["content"]
     return None
 
@@ -142,9 +262,11 @@ def resolve_payload_result(raw_text: str, allowed_tool_names: Set[str]) -> Tuple
     selected_tool_calls: List[Dict[str, Any]] = []
     selected_message_content: Optional[str] = None
 
-    for payload in reversed(try_parse_structured_payloads(raw_text)):
+    for payload in reversed(try_parse_payload_candidates(raw_text)):
         if not selected_tool_calls:
             selected_tool_calls = extract_tool_calls_from_json_payload(payload, allowed_tool_names)
+        if not selected_tool_calls:
+            selected_tool_calls = extract_single_tool_call_from_json_payload(payload, allowed_tool_names)
         if selected_message_content is None:
             selected_message_content = _extract_message_content_from_payload(payload)
         if selected_tool_calls and selected_message_content is not None:
