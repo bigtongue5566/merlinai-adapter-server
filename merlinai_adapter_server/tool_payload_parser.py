@@ -27,15 +27,6 @@ def extract_structured_payload_blocks(raw_text: str) -> List[str]:
     return blocks
 
 
-def try_parse_structured_payloads(raw_text: str) -> List[Dict[str, Any]]:
-    parsed_objects: List[Dict[str, Any]] = []
-    for block in extract_structured_payload_blocks(raw_text):
-        parsed = _try_parse_json_object(block)
-        if isinstance(parsed, dict):
-            parsed_objects.append(parsed)
-    return parsed_objects
-
-
 def _try_parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
     if not isinstance(raw_text, str):
         return None
@@ -53,6 +44,25 @@ def _try_parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
             parsed = None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_json_object_candidate(raw_value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw_value, dict):
+        return raw_value
+    if not isinstance(raw_value, str):
+        return None
+    return _try_parse_json_object(raw_value)
+
+
+def _build_normalized_tool_call(name: str, arguments: Dict[str, Any], call_id: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "id": call_id or f"call_{uuid.uuid4().hex}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(arguments, ensure_ascii=False),
+        },
+    }
 
 
 def _extract_fenced_json_blocks(raw_text: str) -> List[str]:
@@ -139,20 +149,36 @@ def extract_tool_calls(inner_data: Dict[str, Any], allowed_tool_names: Optional[
             continue
 
         if isinstance(function_arguments, dict):
-            function_arguments = json.dumps(function_arguments, ensure_ascii=False)
+            normalized.append(
+                _build_normalized_tool_call(
+                    name=function_name,
+                    arguments=function_arguments,
+                    call_id=call.get("id"),
+                )
+            )
         elif not isinstance(function_arguments, str):
             continue
-
-        normalized.append(
-            {
-                "id": call.get("id") or f"call_{uuid.uuid4().hex}",
-                "type": "function",
-                "function": {
-                    "name": function_name,
-                    "arguments": function_arguments,
-                },
-            }
-        )
+        else:
+            parsed_arguments = _parse_json_object_candidate(function_arguments)
+            if parsed_arguments is None:
+                normalized.append(
+                    {
+                        "id": call.get("id") or f"call_{uuid.uuid4().hex}",
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": function_arguments,
+                        },
+                    }
+                )
+                continue
+            normalized.append(
+                _build_normalized_tool_call(
+                    name=function_name,
+                    arguments=parsed_arguments,
+                    call_id=call.get("id"),
+                )
+            )
 
     return normalized
 
@@ -181,16 +207,7 @@ def extract_tool_calls_from_json_payload(
         if not isinstance(arguments, dict):
             continue
 
-        normalized.append(
-            {
-                "id": f"call_{uuid.uuid4().hex}",
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(arguments, ensure_ascii=False),
-                },
-            }
-        )
+        normalized.append(_build_normalized_tool_call(name=name, arguments=arguments))
 
     return normalized
 
@@ -212,29 +229,12 @@ def extract_single_tool_call_from_json_payload(
     if allowed_tool_names is not None and name not in allowed_tool_names:
         return []
 
-    if isinstance(arguments, str):
-        try:
-            parsed_arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            try:
-                parsed_arguments = repair_json(arguments, return_objects=True)
-            except Exception:
-                parsed_arguments = None
-        arguments = parsed_arguments
+    arguments = _parse_json_object_candidate(arguments)
 
     if not isinstance(arguments, dict):
         return []
 
-    return [
-        {
-            "id": payload.get("id") or f"call_{uuid.uuid4().hex}",
-            "type": "function",
-            "function": {
-                "name": name,
-                "arguments": json.dumps(arguments, ensure_ascii=False),
-            },
-        }
-    ]
+    return [_build_normalized_tool_call(name=name, arguments=arguments, call_id=payload.get("id"))]
 
 
 def _extract_message_content_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[str]:

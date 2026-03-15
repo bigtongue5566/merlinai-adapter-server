@@ -56,6 +56,14 @@ def _message_has_transcript_content(message: Message) -> bool:
     return bool(extract_message_text(message.content))
 
 
+def _is_tool_interaction_message(message: Message) -> bool:
+    return (
+        message.role == "tool"
+        or bool(message.tool_call_id)
+        or (message.role == "assistant" and bool(message.tool_calls))
+    )
+
+
 def select_tool_prompt_messages(messages: List[Message]) -> List[Message]:
     conversational_messages = [
         message
@@ -113,31 +121,15 @@ def build_conversation_transcript(messages: List[Message]) -> str:
 
 def has_recent_tool_interaction(messages: List[Message], window: int = 6) -> bool:
     recent_messages = messages[-window:] if window > 0 else messages
-    for message in recent_messages:
-        if message.role == "tool":
-            return True
-        if message.tool_call_id:
-            return True
-        if message.role == "assistant" and message.tool_calls:
-            return True
-    return False
+    return any(_is_tool_interaction_message(message) for message in recent_messages)
 
 
 def count_recent_tool_interactions(messages: List[Message], window: int = 8) -> int:
     recent_messages = messages[-window:] if window > 0 else messages
-    count = 0
-    for message in recent_messages:
-        if message.role == "tool":
-            count += 1
-        elif message.role == "assistant" and message.tool_calls:
-            count += 1
-        elif message.tool_call_id:
-            count += 1
-    return count
+    return sum(1 for message in recent_messages if _is_tool_interaction_message(message))
 
 
 def last_message_is_tool_result(messages: List[Message]) -> bool:
     if not messages:
         return False
-    last_message = messages[-1]
-    return last_message.role == "tool" or bool(last_message.tool_call_id)
+    return _is_tool_interaction_message(messages[-1])

@@ -1,7 +1,7 @@
 import datetime
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
@@ -12,7 +12,7 @@ from .tool_payload_parser import filter_allowed_tool_calls, resolve_payload_resu
 from .tool_prompt import get_allowed_tool_names, normalize_tool_choice, should_force_tool_json
 
 
-def has_successful_tool_result(messages: List[Any]) -> bool:
+def _has_successful_tool_result(messages: List[Any]) -> bool:
     success_markers = (
         "wrote file successfully",
         "file written successfully",
@@ -26,7 +26,7 @@ def has_successful_tool_result(messages: List[Any]) -> bool:
     return False
 
 
-def is_unhelpful_followup_message(content: Optional[str]) -> bool:
+def _is_unhelpful_followup_message(content: Optional[str]) -> bool:
     if not isinstance(content, str):
         return False
 
@@ -44,7 +44,7 @@ def _build_response_message(
     full_content: str,
     selected_message_content: Optional[str],
     all_tool_calls: List[Dict[str, Any]],
-) -> Tuple[Dict[str, Any], str]:
+) -> tuple[Dict[str, Any], str]:
     response_message: Dict[str, Any] = {"role": "assistant", "content": selected_message_content or full_content or None}
     finish_reason = "stop"
 
@@ -52,7 +52,7 @@ def _build_response_message(
         response_message["content"] = None
         response_message["tool_calls"] = all_tool_calls
         finish_reason = "tool_calls"
-    elif has_successful_tool_result(request.messages) and is_unhelpful_followup_message(response_message.get("content")):
+    elif _has_successful_tool_result(request.messages) and _is_unhelpful_followup_message(response_message.get("content")):
         response_message["content"] = "Done."
 
     return response_message, finish_reason
@@ -137,6 +137,28 @@ def build_openai_response(request: OpenAIRequest, full_content: str, response_to
     }
 
 
+def _build_stream_chunk(
+    response_id: str,
+    created: int,
+    model: str,
+    delta: Dict[str, Any],
+    finish_reason: Optional[str],
+) -> str:
+    return (
+        "data: "
+        + json.dumps(
+            {
+                "id": response_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            }
+        )
+        + "\n\n"
+    )
+
+
 def build_streamed_openai_response(request: OpenAIRequest, full_content: str, response_tool_calls: List[Dict[str, Any]]):
     response_payload = build_openai_response(request, full_content, response_tool_calls)
     response_id = response_payload["id"]
@@ -154,18 +176,60 @@ def build_streamed_openai_response(request: OpenAIRequest, full_content: str, re
         },
     )
 
-    yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created, 'model': request.model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
+    yield _build_stream_chunk(
+        response_id=response_id,
+        created=created,
+        model=request.model,
+        delta={"role": "assistant"},
+        finish_reason=None,
+    )
 
     if finish_reason == "tool_calls":
         for index, tool_call in enumerate(message["tool_calls"]):
-            yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created, 'model': request.model, 'choices': [{'index': 0, 'delta': {'tool_calls': [{'index': index, 'id': tool_call['id'], 'type': 'function', 'function': {'name': tool_call['function']['name'], 'arguments': tool_call['function']['arguments']}}]}, 'finish_reason': None}]})}\n\n"
-        yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created, 'model': request.model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+            yield _build_stream_chunk(
+                response_id=response_id,
+                created=created,
+                model=request.model,
+                delta={
+                    "tool_calls": [
+                        {
+                            "index": index,
+                            "id": tool_call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tool_call["function"]["name"],
+                                "arguments": tool_call["function"]["arguments"],
+                            },
+                        }
+                    ]
+                },
+                finish_reason=None,
+            )
+        yield _build_stream_chunk(
+            response_id=response_id,
+            created=created,
+            model=request.model,
+            delta={},
+            finish_reason="tool_calls",
+        )
         yield "data: [DONE]\n\n"
         return
 
     content = message.get("content") or ""
     if content:
-        yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created, 'model': request.model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+        yield _build_stream_chunk(
+            response_id=response_id,
+            created=created,
+            model=request.model,
+            delta={"content": content},
+            finish_reason=None,
+        )
 
-    yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created, 'model': request.model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+    yield _build_stream_chunk(
+        response_id=response_id,
+        created=created,
+        model=request.model,
+        delta={},
+        finish_reason="stop",
+    )
     yield "data: [DONE]\n\n"
