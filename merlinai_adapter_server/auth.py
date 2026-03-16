@@ -1,6 +1,7 @@
 import datetime
 import http.client
 import json
+import socket
 import threading
 import urllib.parse
 from typing import Any, Dict, Optional
@@ -8,6 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 
 from .config import (
+    AUTH_REQUEST_TIMEOUT_SECONDS,
     FIREBASE_API_KEY,
     FIREBASE_AUTH_HOST,
     FIREBASE_AUTH_PATH,
@@ -17,6 +19,7 @@ from .config import (
     MERLIN_PASSWORD,
     TOKEN_REFRESH_BUFFER_SECONDS,
 )
+from .logging_config import log_debug_payload
 
 
 class MerlinTokenManager:
@@ -29,16 +32,21 @@ class MerlinTokenManager:
     def get_access_token(self) -> str:
         with self._lock:
             if self._has_valid_token():
+                log_debug_payload("auth_token_cache_hit", {"expires_at": self._expires_at})
                 return self._id_token  # type: ignore[return-value]
 
             if self._refresh_token:
                 try:
+                    log_debug_payload("auth_token_refresh_start", {"expires_at": self._expires_at})
                     self._refresh_access_token()
+                    log_debug_payload("auth_token_refresh_success", {"expires_at": self._expires_at})
                     return self._id_token  # type: ignore[return-value]
                 except HTTPException:
                     self._clear_tokens()
 
+            log_debug_payload("auth_sign_in_start", {})
             self._sign_in()
+            log_debug_payload("auth_sign_in_success", {"expires_at": self._expires_at})
             return self._id_token  # type: ignore[return-value]
 
     def _has_valid_token(self) -> bool:
@@ -94,11 +102,16 @@ class MerlinTokenManager:
         )
 
     def _request_json(self, host: str, path: str, payload: str, headers: Dict[str, str]) -> Dict[str, Any]:
-        conn = http.client.HTTPSConnection(host)
+        conn = http.client.HTTPSConnection(host, timeout=AUTH_REQUEST_TIMEOUT_SECONDS)
         try:
-            conn.request("POST", path, payload, headers)
-            res = conn.getresponse()
-            body = res.read().decode("utf-8", errors="ignore")
+            try:
+                conn.request("POST", path, payload, headers)
+                res = conn.getresponse()
+                body = res.read().decode("utf-8", errors="ignore")
+            except socket.timeout as exc:
+                raise HTTPException(status_code=504, detail=f"Firebase auth request timed out: {host}{path}") from exc
+            except OSError as exc:
+                raise HTTPException(status_code=502, detail=f"Firebase auth request failed: {host}{path}") from exc
         finally:
             conn.close()
 

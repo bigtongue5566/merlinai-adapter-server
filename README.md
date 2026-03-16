@@ -70,8 +70,8 @@ http://localhost:8000
 
 當 client 傳入 OpenAI `tools` / `tool_choice` 時，proxy 會：
 
-1. 保留 `mcpConfig.tools` 與 `mcpConfig.toolChoice` 給 Merlin
-2. 同時把對話與工具定義包成嚴格 JSON 輸出指令，降低 Merlin 只回自然語言的機率
+1. 固定將 `metadata.mcpConfig.isEnabled` 設成 `false`，不再依賴 Merlin 的 `mcpConfig` 工具注入
+2. 改由 prompt 注入對話與工具定義，要求 Merlin 嚴格輸出 tool payload，降低只回自然語言的機率
 3. 若回來內容可解析為 `{"type":"tool_calls"...}`，proxy 會轉成 OpenAI `message.tool_calls`
 4. 若 `tool_choice` 是 `required` 或指定函式，但仍解析不到工具呼叫，proxy 直接回 `422`
 

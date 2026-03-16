@@ -149,14 +149,15 @@ flowchart TD
 ### B. Tool-calling 請求
 
 1. [app.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/app.py) 偵測到 `request.tools`
-2. [tool_prompt.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/tool_prompt.py) 建立嚴格的 tool prompt
-3. 這個 prompt 會被當成送給 Merlin 的主要 message content
-4. Merlin 可能回傳：
+2. [merlin_client.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/merlin_client.py) 固定將 `metadata.mcpConfig.isEnabled` 設成 `false`
+3. [tool_prompt.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/tool_prompt.py) 建立嚴格的 tool prompt
+4. 這個 prompt 會被當成送給 Merlin 的主要 message content
+5. Merlin 可能回傳：
    - event stream 中的 tool calls
    - payload block 內的結構化 JSON
    - 一般純文字
-5. [tool_payload_parser.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/tool_payload_parser.py) 把可用的 tool 資訊抽出來
-6. [openai_response_builder.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/openai_response_builder.py) 決定最後應回：
+6. [tool_payload_parser.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/tool_payload_parser.py) 把可用的 tool 資訊抽出來
+7. [openai_response_builder.py](/C:/Users/BigTongue/Documents/git%20project/merlinai-adapter-server/merlinai_adapter_server/openai_response_builder.py) 決定最後應回：
    - tool call
    - 一般 assistant message
    - 或 `422`
