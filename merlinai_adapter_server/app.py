@@ -11,7 +11,7 @@ from .models_catalog import build_models_response
 from .openai_response_builder import build_streamed_openai_response
 from .request_logging import clear_request_log_context, set_request_log_context
 from .schemas import OpenAIRequest
-from .security import verify_proxy_api_key
+from .security import verify_adapter_api_key
 
 configure_logger()
 
@@ -20,7 +20,7 @@ app = FastAPI(title="merlinai-adapter-server")
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: OpenAIRequest, authorization: Optional[str] = Header(default=None)):
-    verify_proxy_api_key(authorization)
+    verify_adapter_api_key(authorization)
     request_id = str(uuid.uuid4())
     should_clear_context = True
     set_request_log_context(request_id=request_id)
@@ -63,5 +63,5 @@ async def chat_completions(request: OpenAIRequest, authorization: Optional[str] 
 
 @app.get("/v1/models")
 async def list_models(authorization: Optional[str] = Header(default=None)):
-    verify_proxy_api_key(authorization)
+    verify_adapter_api_key(authorization)
     return build_models_response()

@@ -179,7 +179,7 @@ flowchart TD
 
 職責：
 
-- 定義 proxy 對外宣告的模型清單
+- 定義 adapter 對外宣告的模型清單
 - 組出 `/v1/models` 的 OpenAI 相容回應
 
 ## 詳細流程
