@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-LOG_PREFIX = "[proxy] "
+LOG_PREFIX = "[adapter] "
 
 
 def _try_json_loads(raw: str) -> Any:
@@ -16,7 +16,7 @@ def _try_json_loads(raw: str) -> Any:
         return raw
 
 
-def parse_proxy_log(log_path: Path) -> list[dict[str, Any]]:
+def parse_adapter_log(log_path: Path) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     body_lines: list[str] = []
@@ -245,9 +245,9 @@ def build_markdown(
 
             issue_lines: list[str] = []
             if attempt == "repair":
-                issue_lines.append("Proxy had to issue a repair retry because the first tool-oriented response was not usable as-is.")
+                issue_lines.append("Adapter had to issue a repair retry because the first tool-oriented response was not usable as-is.")
             if attempt == "agentic_repair":
-                issue_lines.append("Proxy had to issue an agentic retry because upstream stopped instead of cleanly continuing the tool workflow.")
+                issue_lines.append("Adapter had to issue an agentic retry because upstream stopped instead of cleanly continuing the tool workflow.")
             if attempt_data.get("merlin_non_stream_error"):
                 issue_lines.append("Merlin upstream returned a non-200 response.")
             raw_response = attempt_data.get("merlin_raw_response")
@@ -305,7 +305,7 @@ def build_markdown(
         lines.append("- No request logs were found.")
     else:
         total_attempts = sum(len(request_data["attempts"]) for request_data in requests.values())
-        lines.append(f"- Proxy logged `{len(requests)}` client request(s) and `{total_attempts}` Merlin attempt(s).")
+        lines.append(f"- Adapter logged `{len(requests)}` client request(s) and `{total_attempts}` Merlin attempt(s).")
         has_retry_issues = any(
             any(attempt_name in {"repair", "agentic_repair"} for attempt_name in request_data["attempts"])
             for request_data in requests.values()
@@ -316,25 +316,25 @@ def build_markdown(
             for attempt_data in request_data["attempts"].values()
         )
         if has_errors:
-            lines.append("- Verdict: proxy path completed with upstream or transport errors that need review.")
+            lines.append("- Verdict: adapter path completed with upstream or transport errors that need review.")
         elif has_retry_issues or opencode_findings:
-            lines.append("- Verdict: proxy path is usable, but this run exposed Merlin/OpenCode workflow issues that need attention.")
+            lines.append("- Verdict: adapter path is usable, but this run exposed Merlin/OpenCode workflow issues that need attention.")
         else:
-            lines.append("- Verdict: proxy path looks usable for this scenario.")
+            lines.append("- Verdict: adapter path looks usable for this scenario.")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a Markdown report from proxy.log")
-    parser.add_argument("--log", required=True, type=Path, help="Path to proxy.log")
+    parser = argparse.ArgumentParser(description="Build a Markdown report from adapter.log")
+    parser.add_argument("--log", required=True, type=Path, help="Path to adapter.log")
     parser.add_argument("--out", required=True, type=Path, help="Path to output Markdown report")
     parser.add_argument("--session-id", default=None, help="OpenCode session ID")
     parser.add_argument("--model", default=None, help="Model name used for the run")
     parser.add_argument("--session-export", default=None, type=Path, help="Path to `opencode export` JSON")
     args = parser.parse_args()
 
-    entries = parse_proxy_log(args.log)
+    entries = parse_adapter_log(args.log)
     requests, warnings = group_entries(entries)
     opencode_findings = parse_opencode_session_export(args.session_export) if args.session_export else None
     output = build_markdown(

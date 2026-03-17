@@ -11,12 +11,12 @@ from .request_logging import get_attempt, get_request_id
 def configure_logger() -> None:
     logger.remove()
     console_format = (
-        "<green>[proxy]</green> "
+        "<green>[adapter]</green> "
         "<cyan>{time:YYYY-MM-DD HH:mm:ss}</cyan> "
         "<level>{level: <8}</level> "
         "<level>{message}</level>"
     )
-    file_format = "[proxy] {time:YYYY-MM-DDTHH:mm:ssZZ} {level} {message}"
+    file_format = "[adapter] {time:YYYY-MM-DDTHH:mm:ssZZ} {level} {message}"
     logger.add(
         sys.stderr,
         level=LOG_LEVEL_NAME,
