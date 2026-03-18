@@ -1,140 +1,70 @@
 # merlinai-adapter-server
 
-這個專案提供一個 FastAPI adapter server，將 OpenAI 格式的請求轉換成 Merlin API 格式，並自動用 Firebase 帳密換取 Bearer token。
+OpenAI-compatible FastAPI adapter that forwards chat requests to Merlin, manages Firebase-backed Merlin authentication, and converts Merlin responses back into OpenAI-style payloads.
 
-## 功能
+**Languages:** English | [繁體中文](README.zh-TW.md)
 
-- 支持 `/v1/chat/completions` 端點
-- 支持 `/v1/models` 端點
-- 支持串流與非串流回應
-- 自動取得與刷新 Merlin Bearer token
-- 使用 `.env` 中的 `ADAPTER_API_KEY` 保護 adapter 入口
-- 自動處理 Merlin API 所需的 UUID 與格式轉換
-- 當請求帶有 `tools` 時，額外啟用 tool-calling 相容層，將 Merlin 輸出轉成 OpenAI `tool_calls`
-- 若 `tool_choice` 為 `required` 或指定函式，但上游仍未產生有效工具呼叫，會回傳 `422`，避免上游誤判為成功純文字回覆
-- 每次請求都會附帶 `request_id`，debug log 也會帶 `attempt`（`initial` / `repair` / `agentic_repair`）
-- 可用 Docker Compose 啟動
-- 可用 `LOG_LEVEL=DEBUG` 檢查 Roo Code / OpenCode 實際送入的 payload
-- 可將 debug 訊息透過 `loguru` 同步寫入專案內的 `logs/adapter.log`，也可關閉檔案寫入
+## Overview
 
-## 安裝步驟
+`merlinai-adapter-server` exposes a small OpenAI-style surface for clients that expect `/v1/chat/completions` and `/v1/models`.
 
-1. 確保已安裝 Python 3.12+
-2. 安裝依賴套件
+It handles:
+
+- adapter API key validation
+- Merlin login and token refresh
+- prompt and payload transformation
+- streaming and non-streaming responses
+- tool-calling compatibility with OpenAI `tool_calls`
+
+## Key Features
+
+- OpenAI-compatible `POST /v1/chat/completions`
+- OpenAI-compatible `GET /v1/models`
+- Streaming and non-streaming response support
+- Automatic Merlin bearer token acquisition and refresh
+- Adapter-level API key protection via `Authorization: Bearer <ADAPTER_API_KEY>`
+- Tool-calling compatibility layer that maps Merlin output to OpenAI `tool_calls`
+- Strict `422` responses when required tool calls are not produced
+- Debug logging for request/response payload inspection
+- Local and Docker-based deployment options
+
+## Quick Start
+
+### Requirements
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- A Merlin account
+
+### Install dependencies
 
 ```bash
 uv sync
 ```
 
-3. 建立環境變數檔
+### Create environment variables
 
 ```bash
-copy .env.example .env
+cp .env.example .env
 ```
 
-4. 編輯 `.env`，填入你的 Merlin 帳號密碼與 adapter API key
+PowerShell:
 
-## 本機執行
+```powershell
+Copy-Item .env.example .env
+```
+
+Update `.env` with your Merlin credentials and adapter API key.
+
+### Run locally
 
 ```bash
 uv run python main.py
 ```
 
-伺服器將在 `http://0.0.0.0:8000` 啟動。
+The server starts on `http://0.0.0.0:8000`.
 
-## Docker Compose
-
-建立好 `.env` 後，直接執行：
-
-```bash
-docker compose up --build -d
-```
-
-查看 logs：
-
-```bash
-docker compose logs -f
-```
-
-停止服務：
-
-```bash
-docker compose down
-```
-
-啟動後服務會在：
-
-```text
-http://localhost:8000
-```
-
-## Tool calling 相容說明
-
-當 client 傳入 OpenAI `tools` / `tool_choice` 時，adapter 會：
-
-1. 固定將 `metadata.mcpConfig.isEnabled` 設成 `false`，不再依賴 Merlin 的 `mcpConfig` 工具注入
-2. 固定將 `metadata.webAccess` 設成 `true`
-3. 改由 prompt 注入結構化對話與完整工具定義，要求 Merlin 嚴格輸出 tool payload，降低只回自然語言的機率
-4. prompt 會保留：
-   - `Platform System Messages JSON`
-   - `User System Messages JSON`
-   - `Conversation Messages JSON`
-   - `Available Tools JSON`
-5. 若回來內容可解析為 `{"type":"tool_calls"...}`，adapter 會轉成 OpenAI `message.tool_calls`
-6. 若 `tool_choice` 是 `required` 或指定函式，但仍解析不到工具呼叫，adapter 直接回 `422`
-7. 若上游回傳 malformed payload，adapter 會用 `repair` prompt 重試一次
-8. 若在 `tool_choice=auto` 的多步工具流程中，模型提前回成一般 `message`，adapter 可能再做一次 `agentic_repair`
-
-這樣上游就不會再收到「明明要求必需工具呼叫，卻被當成一般文字成功回覆」的假成功結果，也保留一次額外補救機會。
-
-## Debug Roo Code / OpenCode payload
-
-如果你要分析 tool calling，先把 `.env` 裡這個值調成：
-
-```text
-LOG_LEVEL=DEBUG
-```
-
-如果你只想輸出到 console、不想寫檔，也可以設定：
-
-```text
-LOG_TO_FILE=false
-```
-
-之後重新啟動 adapter。每次 `/v1/chat/completions` 都會輸出：
-
-- 原始 request body
-- 是否帶了 `tools`
-- `tool_choice`
-- `request_id` 與 `attempt`
-- 轉發給 Merlin 的 payload
-- tool prompt / non-tool prompt 統計
-- Merlin 回來的完整 `raw_event_chunks`、`raw_events`、`assembled_content`
-- structured payload 解析結果
-- 是否觸發 `repair` 或 `agentic_repair`
-- 最後回給客戶端的 OpenAI 格式 response
-
-這些內容除了印到 console，也會透過 `loguru` 寫入專案內的 `logs/adapter.log`；超過約 1 MB 後會保留 3 份輪替檔。若 `LOG_LEVEL=INFO`，這些 debug payload 不會輸出；若 `LOG_LEVEL=DEBUG`，則會完整輸出。若 `LOG_TO_FILE=false`，則只輸出到 console。
-
-這樣就能直接看 Roo Code / OpenCode 是不是有送 `tools`，以及 Merlin 回來有沒有任何可映射成 `tool_calls` 的結構。
-
-如果你要把 `adapter.log` 整理成 Markdown 報表，可執行：
-
-```bash
-uv run python scripts/build_log_report.py --log logs/adapter.log --out logs/report.md
-```
-
-如果你要比較不同工具傳遞策略，也可以執行：
-
-```bash
-uv run python scripts/compare_tool_transport_modes.py
-```
-
-## 使用範例
-
-可用模型目前包含：`gpt-5.4`、`grok-4.1-fast`、`gemini-3.1-flash-lite`、`gemini-3.1-pro`、`claude-4.6-sonnet`、`claude-4.6-opus`、`glm-5`、`minimax-m2.5`。
-
-呼叫 adapter 時要帶你自己的 adapter API key：
+### Example request
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
@@ -142,39 +72,93 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Authorization: Bearer sk-123" \
   -d '{
     "model": "claude-4.6-sonnet",
-    "messages": [{"role": "user", "content": "你好！"}],
-    "stream": true
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false
   }'
 ```
 
-## 環境變數
+## Docker
 
-- `MERLIN_EMAIL`: Merlin 登入信箱
-- `MERLIN_PASSWORD`: Merlin 登入密碼
-- `MERLIN_FIREBASE_API_KEY`: Firebase Web API key；未設定時會退回內建預設值
-- `MERLIN_VERSION`: 轉發時使用的 Merlin version header
-- `ADAPTER_API_KEY`: 你的 adapter 對外要求的 API key
-- `LOG_LEVEL`: logger 層級，預設 `INFO`；設成 `DEBUG` 會輸出 request/response debug logs
-- `LOG_TO_FILE`: 是否寫入檔案 log，預設 `true`
-- `AUTH_REQUEST_TIMEOUT_SECONDS`: Firebase 登入與 refresh request timeout，預設 `20`
-- `MERLIN_REQUEST_TIMEOUT_SECONDS`: Merlin upstream request timeout，預設 `45`
-- `TOOL_PROMPT_MAX_MESSAGES`: tool prompt 保留的非 system 訊息數量上限，預設 `5`
-- `TOOL_DESCRIPTION_MAX_CHARS`: tool description 裁切上限，預設 `160`
-- `TOOL_MESSAGE_MAX_CHARS`: 一般訊息裁切上限，預設 `1200`
-- `TOOL_SYSTEM_MAX_CHARS`: system message 裁切上限，預設至少 `12000`
-- `TOOL_TOOL_RESULT_MAX_CHARS`: tool result 裁切上限，預設至少 `6000`
-- `TOOL_TOOL_ARGUMENTS_MAX_CHARS`: assistant tool arguments 裁切上限，預設至少 `4000`
-- `TOOL_PARAMETER_DESCRIPTION_MAX_CHARS`: tool parameter description 裁切上限，預設至少 `300`
+Build and start the service:
 
-## 如何找到 `MERLIN_FIREBASE_API_KEY`
+```bash
+docker compose up --build -d
+```
 
-最直接的方法是從 Merlin Web 登入流程的 network request 取得。
+View logs:
 
-1. 打開瀏覽器進入 `https://extension.getmerlin.in`
-2. 開啟 DevTools 的 Network 分頁
-3. 執行登入流程
-4. 找這個請求：
+```bash
+docker compose logs -f
+```
+
+Stop the service:
+
+```bash
+docker compose down
+```
+
+The container publishes the API on `http://localhost:8000`.
+
+## API Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/v1/chat/completions` | Accepts OpenAI-style chat completion requests and returns OpenAI-style responses. |
+| `GET` | `/v1/models` | Returns the adapter's published Merlin-backed model list. |
+
+For request and response examples, see [API reference](docs/api-reference.md).
+
+## Supported Models
+
+- `gpt-5.4`
+- `grok-4.1-fast`
+- `gemini-3.1-flash-lite`
+- `gemini-3.1-pro`
+- `claude-4.6-sonnet`
+- `claude-4.6-opus`
+- `glm-5`
+- `minimax-m2.5`
+
+## Configuration
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `MERLIN_EMAIL` | Yes | None | Merlin login email. |
+| `MERLIN_PASSWORD` | Yes | None | Merlin login password. |
+| `ADAPTER_API_KEY` | No | `sk-123` | API key expected in the incoming `Authorization` header. |
+| `MERLIN_FIREBASE_API_KEY` | No | Built-in value | Firebase Web API key used for Merlin sign-in. |
+| `MERLIN_VERSION` | No | `iframe-merlin-7.5.19` | Merlin version header sent upstream. |
+| `LOG_LEVEL` | No | `INFO` | Logger level. Set to `DEBUG` for payload tracing. |
+| `LOG_TO_FILE` | No | `true` | Writes logs to `logs/adapter.log` when enabled. |
+| `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Timeout for Firebase sign-in and refresh requests. |
+| `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Timeout for Merlin upstream requests. |
+| `TOOL_PROMPT_MAX_MESSAGES` | No | `5` | Maximum number of non-system messages retained in tool prompts. |
+| `TOOL_DESCRIPTION_MAX_CHARS` | No | `160` | Maximum tool description length in prompt compaction. |
+| `TOOL_MESSAGE_MAX_CHARS` | No | `1200` | Maximum general message length in tool prompt compaction. |
+| `TOOL_SYSTEM_MAX_CHARS` | No | `12000` minimum | Maximum system message length in tool prompt compaction. |
+| `TOOL_TOOL_RESULT_MAX_CHARS` | No | `6000` minimum | Maximum serialized tool result length in tool prompt compaction. |
+| `TOOL_TOOL_ARGUMENTS_MAX_CHARS` | No | `4000` minimum | Maximum serialized assistant tool argument length. |
+| `TOOL_PARAMETER_DESCRIPTION_MAX_CHARS` | No | `300` minimum | Maximum tool parameter description length. |
+
+## Debugging
+
+Use `LOG_LEVEL=DEBUG` to inspect the adapter's incoming request, forwarded Merlin payload, structured payload parsing, and outgoing OpenAI response.
+
+If you only want console output, set:
 
 ```text
-https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=...
+LOG_TO_FILE=false
 ```
+
+Useful helpers:
+
+- `uv run python scripts/build_log_report.py --log logs/adapter.log --out logs/report.md`
+- `uv run python scripts/compare_tool_transport_modes.py`
+
+## Documentation
+
+- [API reference](docs/api-reference.md)
+- [Architecture flow](docs/architecture-flow.md)
+- [Development notes](docs/development-notes.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Traditional Chinese README](README.zh-TW.md)
