@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any, Dict
 
+from .schemas import OpenAIModel, OpenAIModelsResponse
+
 SUPPORTED_MODELS = (
     "gpt-5.4",
     "grok-4.1-fast",
@@ -15,15 +17,13 @@ SUPPORTED_MODELS = (
 
 def build_models_response() -> Dict[str, Any]:
     created = int(datetime.now().timestamp())
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": model,
-                "object": "model",
-                "created": created,
-                "owned_by": "merlin",
-            }
+    response = OpenAIModelsResponse(
+        data=[
+            OpenAIModel(
+                id=model,
+                created=created,
+            )
             for model in SUPPORTED_MODELS
         ],
-    }
+    )
+    return response.model_dump()

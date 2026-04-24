@@ -1,11 +1,14 @@
 import json
 import re
-import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from json_repair import repair_json
 
 from .protocol_constants import STRUCTURED_PAYLOAD_END, STRUCTURED_PAYLOAD_START
+from .structured_output import (
+    normalize_merlin_event_tool_calls,
+    resolve_tool_strategy_payload,
+)
 
 
 def extract_structured_payload_blocks(raw_text: str) -> List[str]:
@@ -44,25 +47,6 @@ def _try_parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
             parsed = None
 
     return parsed if isinstance(parsed, dict) else None
-
-
-def _parse_json_object_candidate(raw_value: Any) -> Optional[Dict[str, Any]]:
-    if isinstance(raw_value, dict):
-        return raw_value
-    if not isinstance(raw_value, str):
-        return None
-    return _try_parse_json_object(raw_value)
-
-
-def _build_normalized_tool_call(name: str, arguments: Dict[str, Any], call_id: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "id": call_id or f"call_{uuid.uuid4().hex}",
-        "type": "function",
-        "function": {
-            "name": name,
-            "arguments": json.dumps(arguments, ensure_ascii=False),
-        },
-    }
 
 
 def _extract_fenced_json_blocks(raw_text: str) -> List[str]:
@@ -128,126 +112,23 @@ def try_parse_payload_candidates(raw_text: str) -> List[Dict[str, Any]]:
 
 def extract_tool_calls(inner_data: Dict[str, Any], allowed_tool_names: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
     raw_tool_calls = inner_data.get("toolCalls") or inner_data.get("tool_calls") or []
-    if not isinstance(raw_tool_calls, list):
-        return []
-
-    normalized: List[Dict[str, Any]] = []
-    for call in raw_tool_calls:
-        if not isinstance(call, dict):
-            continue
-
-        function_payload = call.get("function")
-        if not isinstance(function_payload, dict):
-            continue
-
-        function_name = function_payload.get("name")
-        function_arguments = function_payload.get("arguments")
-
-        if not isinstance(function_name, str) or not function_name:
-            continue
-        if allowed_tool_names is not None and function_name not in allowed_tool_names:
-            continue
-
-        if isinstance(function_arguments, dict):
-            normalized.append(
-                _build_normalized_tool_call(
-                    name=function_name,
-                    arguments=function_arguments,
-                    call_id=call.get("id"),
-                )
-            )
-        elif not isinstance(function_arguments, str):
-            continue
-        else:
-            parsed_arguments = _parse_json_object_candidate(function_arguments)
-            if parsed_arguments is None:
-                normalized.append(
-                    {
-                        "id": call.get("id") or f"call_{uuid.uuid4().hex}",
-                        "type": "function",
-                        "function": {
-                            "name": function_name,
-                            "arguments": function_arguments,
-                        },
-                    }
-                )
-                continue
-            normalized.append(
-                _build_normalized_tool_call(
-                    name=function_name,
-                    arguments=parsed_arguments,
-                    call_id=call.get("id"),
-                )
-            )
-
-    return normalized
+    return normalize_merlin_event_tool_calls(raw_tool_calls, allowed_tool_names)
 
 
 def extract_tool_calls_from_json_payload(
     payload: Optional[Dict[str, Any]], allowed_tool_names: Optional[Set[str]] = None
 ) -> List[Dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return []
-
-    raw_tool_calls = payload.get("tool_calls")
-    if not isinstance(raw_tool_calls, list):
-        return []
-
-    normalized: List[Dict[str, Any]] = []
-    for call in raw_tool_calls:
-        if not isinstance(call, dict):
-            continue
-
-        name = call.get("name")
-        arguments = call.get("arguments", {})
-        if not isinstance(name, str) or not name:
-            continue
-        if allowed_tool_names is not None and name not in allowed_tool_names:
-            continue
-        if not isinstance(arguments, dict):
-            continue
-
-        normalized.append(_build_normalized_tool_call(name=name, arguments=arguments))
-
-    return normalized
+    return resolve_tool_strategy_payload(payload, allowed_tool_names).dump_tool_calls()
 
 
 def extract_single_tool_call_from_json_payload(
     payload: Optional[Dict[str, Any]], allowed_tool_names: Optional[Set[str]] = None
 ) -> List[Dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return []
-
-    function_payload = payload.get("function")
-    if not isinstance(function_payload, dict):
-        return []
-
-    name = function_payload.get("name") or payload.get("name")
-    arguments = function_payload.get("arguments", payload.get("arguments", {}))
-    if not isinstance(name, str) or not name:
-        return []
-    if allowed_tool_names is not None and name not in allowed_tool_names:
-        return []
-
-    arguments = _parse_json_object_candidate(arguments)
-
-    if not isinstance(arguments, dict):
-        return []
-
-    return [_build_normalized_tool_call(name=name, arguments=arguments, call_id=payload.get("id"))]
+    return resolve_tool_strategy_payload(payload, allowed_tool_names).dump_tool_calls()
 
 
 def _extract_message_content_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-
-    if payload.get("type") == "message" and isinstance(payload.get("content"), str):
-        return payload["content"]
-    if isinstance(payload.get("message"), str):
-        return payload["message"]
-    if payload.get("type") in {None, "assistant"} and isinstance(payload.get("content"), str):
-        return payload["content"]
-    return None
+    return resolve_tool_strategy_payload(payload).message_content
 
 
 def filter_allowed_tool_calls(response_tool_calls: List[Dict[str, Any]], allowed_tool_names: Set[str]) -> List[Dict[str, Any]]:
@@ -263,12 +144,11 @@ def resolve_payload_result(raw_text: str, allowed_tool_names: Set[str]) -> Tuple
     selected_message_content: Optional[str] = None
 
     for payload in reversed(try_parse_payload_candidates(raw_text)):
+        resolution = resolve_tool_strategy_payload(payload, allowed_tool_names)
         if not selected_tool_calls:
-            selected_tool_calls = extract_tool_calls_from_json_payload(payload, allowed_tool_names)
-        if not selected_tool_calls:
-            selected_tool_calls = extract_single_tool_call_from_json_payload(payload, allowed_tool_names)
+            selected_tool_calls = resolution.dump_tool_calls()
         if selected_message_content is None:
-            selected_message_content = _extract_message_content_from_payload(payload)
+            selected_message_content = resolution.message_content
         if selected_tool_calls and selected_message_content is not None:
             return selected_tool_calls, selected_message_content
 

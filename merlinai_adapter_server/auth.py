@@ -7,6 +7,7 @@ import urllib.parse
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from .config import (
     AUTH_REQUEST_TIMEOUT_SECONDS,
@@ -20,6 +21,9 @@ from .config import (
     TOKEN_REFRESH_BUFFER_SECONDS,
 )
 from .logging_config import log_debug_payload
+from .schemas import FirebaseRefreshResponse, FirebaseSignInResponse
+
+_JSON_OBJECT_ADAPTER = TypeAdapter(Dict[str, Any])
 
 
 class MerlinTokenManager:
@@ -78,11 +82,11 @@ class MerlinTokenManager:
         )
         path = f"{FIREBASE_AUTH_PATH}?key={FIREBASE_API_KEY}"
         headers = {"content-type": "application/json"}
-        data = self._request_json(FIREBASE_AUTH_HOST, path, payload, headers)
+        data = self._validate_sign_in_response(self._request_json(FIREBASE_AUTH_HOST, path, payload, headers))
         self._set_tokens(
-            id_token=data["idToken"],
-            refresh_token=data["refreshToken"],
-            expires_in=data["expiresIn"],
+            id_token=data.idToken,
+            refresh_token=data.refreshToken,
+            expires_in=data.expiresIn,
         )
 
     def _refresh_access_token(self) -> None:
@@ -94,12 +98,24 @@ class MerlinTokenManager:
         )
         path = f"{FIREBASE_REFRESH_PATH}?key={FIREBASE_API_KEY}"
         headers = {"content-type": "application/x-www-form-urlencoded"}
-        data = self._request_json(FIREBASE_REFRESH_HOST, path, payload, headers)
+        data = self._validate_refresh_response(self._request_json(FIREBASE_REFRESH_HOST, path, payload, headers))
         self._set_tokens(
-            id_token=data["id_token"],
-            refresh_token=data["refresh_token"],
-            expires_in=data["expires_in"],
+            id_token=data.id_token,
+            refresh_token=data.refresh_token,
+            expires_in=data.expires_in,
         )
+
+    def _validate_sign_in_response(self, data: Dict[str, Any]) -> FirebaseSignInResponse:
+        try:
+            return FirebaseSignInResponse.model_validate(data)
+        except ValidationError as exc:
+            raise HTTPException(status_code=502, detail=f"Invalid Firebase sign-in response: {exc}") from exc
+
+    def _validate_refresh_response(self, data: Dict[str, Any]) -> FirebaseRefreshResponse:
+        try:
+            return FirebaseRefreshResponse.model_validate(data)
+        except ValidationError as exc:
+            raise HTTPException(status_code=502, detail=f"Invalid Firebase refresh response: {exc}") from exc
 
     def _request_json(self, host: str, path: str, payload: str, headers: Dict[str, str]) -> Dict[str, Any]:
         conn = http.client.HTTPSConnection(host, timeout=AUTH_REQUEST_TIMEOUT_SECONDS)
@@ -118,7 +134,10 @@ class MerlinTokenManager:
         if res.status != 200:
             raise HTTPException(status_code=502, detail=f"Firebase auth failed: {body}")
 
-        data = json.loads(body)
+        try:
+            data = _JSON_OBJECT_ADAPTER.validate_json(body)
+        except ValidationError as exc:
+            raise HTTPException(status_code=502, detail=f"Invalid Firebase auth JSON response: {exc}") from exc
         if "error" in data:
             raise HTTPException(status_code=502, detail=f"Firebase auth error: {data['error']}")
         return data

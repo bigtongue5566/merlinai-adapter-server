@@ -4,15 +4,17 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from pydantic import BaseModel
+
 from merlinai_adapter_server.merlin_client import MerlinGateway
 from merlinai_adapter_server.message_utils import get_last_user_message
-from merlinai_adapter_server.schemas import Message, OpenAIRequest
+from merlinai_adapter_server.schemas import Message, OpenAIRequest, build_function_tool_payload
 from merlinai_adapter_server.tool_payload_parser import resolve_payload_result, try_parse_payload_candidates
 from merlinai_adapter_server.tool_prompt import (
     build_tool_prompt,
@@ -21,22 +23,17 @@ from merlinai_adapter_server.tool_prompt import (
 )
 
 
+class WeatherInputSchema(BaseModel):
+    location: str
+    unit: Literal["celsius", "fahrenheit"] | None = None
+
+
 TEST_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "required": ["location"],
-                "properties": {
-                    "location": {"type": "string"},
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-            },
-        },
-    }
+    build_function_tool_payload(
+        name="get_current_weather",
+        description="Get the current weather in a given location",
+        input_schema=WeatherInputSchema,
+    )
 ]
 
 TEST_USER_MESSAGE = (

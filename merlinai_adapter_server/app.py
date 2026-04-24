@@ -10,7 +10,7 @@ from .merlin_client import merlin_openai_client
 from .models_catalog import build_models_response
 from .openai_response_builder import build_streamed_openai_response
 from .request_logging import clear_request_log_context, set_request_log_context
-from .schemas import OpenAIRequest
+from .schemas import OpenAIRequest, model_dump_compat
 from .security import verify_adapter_api_key
 
 configure_logger()
@@ -31,7 +31,7 @@ async def chat_completions(request: OpenAIRequest, authorization: Optional[str] 
                 "model": request.model,
                 "stream": request.stream,
                 "has_tools": bool(request.tools),
-                "tool_choice": request.tool_choice,
+                "tool_choice": model_dump_compat(request.tool_choice),
                 "message_count": len(request.messages),
                 "messages": request.model_dump(exclude_none=True).get("messages", []),
                 "request": request.model_dump(exclude_none=True),
