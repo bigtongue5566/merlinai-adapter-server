@@ -2,11 +2,10 @@ import datetime
 import http.client
 import json
 import socket
-import uuid
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .auth import token_manager
 from .config import MERLIN_API_URL, MERLIN_PATH, MERLIN_REQUEST_TIMEOUT_SECONDS, MERLIN_VERSION
@@ -14,7 +13,7 @@ from .logging_config import log_debug_payload
 from .message_utils import build_non_tool_prompt, last_message_is_tool_output
 from .openai_response_builder import build_openai_response
 from .request_logging import set_attempt_context
-from .schemas import OpenAIRequest
+from .schemas import MerlinEvent, MerlinMessagePayload, MerlinPayload, OpenAIRequest, model_dump_compat
 from .tool_payload_parser import extract_tool_calls
 from .tool_prompt import (
     build_tool_prompt,
@@ -32,32 +31,14 @@ class MerlinGateway:
         *,
         model: str,
         user_message: str,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Any]] = None,
         tool_choice: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        return {
-            "attachments": [],
-            "chatId": str(uuid.uuid4()),
-            "language": "AUTO",
-            "message": {
-                "childId": str(uuid.uuid4()),
-                "content": user_message,
-                "context": "",
-                "id": str(uuid.uuid4()),
-                "parentId": "root",
-            },
-            "mode": "UNIFIED_CHAT",
-            "model": model,
-            "metadata": {
-                "deepResearch": False,
-                "merlinMagic": False,
-                "noTask": True,
-                "proFinderMode": False,
-                "mcpConfig": {"isEnabled": False},
-                "isWebpageChat": False,
-                "webAccess": True,
-            },
-        }
+        payload = MerlinPayload(
+            model=model,
+            message=MerlinMessagePayload(content=user_message),
+        )
+        return payload.model_dump()
 
     def send_request(
         self,
@@ -138,26 +119,27 @@ class MerlinGateway:
             raw_chunks.append(data_str)
 
             try:
-                merlin_data = json.loads(data_str)
-                raw_events.append(merlin_data)
-                inner_data = merlin_data.get("data", {})
-                text = inner_data.get("text", "")
-                content = inner_data.get("content", "")
+                merlin_event = MerlinEvent.model_validate_json(data_str)
+                raw_events.append(merlin_event.model_dump(exclude_none=True))
+                inner_data = merlin_event.data.model_dump(exclude_none=True)
+                text = merlin_event.data.text or ""
+                content = merlin_event.data.content or ""
                 full_content += text or content
                 response_tool_calls.extend(extract_tool_calls(inner_data, allowed_tool_names))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValidationError):
                 continue
 
         return full_content, response_tool_calls, raw_events, raw_chunks
 
 
-@dataclass(frozen=True)
-class ChatCompletionContext:
+class ChatCompletionContext(BaseModel):
     # Snapshot only the request fields needed by the Merlin/OpenAI orchestration path.
+    model_config = ConfigDict(frozen=True)
+
     model: str
-    tools: List[Dict[str, Any]]
+    tools: List[Any] = Field(default_factory=list)
     tool_choice: Any
-    allowed_tool_names: Set[str]
+    allowed_tool_names: Set[str] = Field(default_factory=set)
 
     @classmethod
     def from_request(cls, request: OpenAIRequest) -> "ChatCompletionContext":
@@ -169,16 +151,18 @@ class ChatCompletionContext:
         )
 
 
-@dataclass(frozen=True)
-class MerlinResponseEnvelope:
+class MerlinResponseEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     content: str
     tool_calls: List[Dict[str, Any]]
     raw_events: List[Dict[str, Any]]
     raw_chunks: List[str]
 
 
-@dataclass(frozen=True)
-class ChatCompletionResult:
+class ChatCompletionResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     response_payload: Dict[str, Any]
     content: str
     tool_calls: List[Dict[str, Any]]
@@ -323,7 +307,7 @@ class MerlinOpenAIClient:
             {
                 "prompt_mode": prompt_mode,
                 "previous_response": previous_response,
-                "payload": merlin_payload,
+                "payload": model_dump_compat(merlin_payload),
             },
         )
         return merlin_payload

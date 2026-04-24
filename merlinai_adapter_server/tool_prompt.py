@@ -16,10 +16,11 @@ from .message_utils import (
     trim_text,
 )
 from .protocol_constants import STRUCTURED_PAYLOAD_END, STRUCTURED_PAYLOAD_START, ToolPromptMode
-from .schemas import OpenAIRequest
+from .schemas import OpenAIRequest, build_tool_prompt_payload_json_schema, model_dump_compat
 
 
 def normalize_tool_choice(tool_choice: Optional[Union[str, Dict[str, Any]]]) -> Optional[str]:
+    tool_choice = model_dump_compat(tool_choice)
     if isinstance(tool_choice, str):
         return tool_choice
 
@@ -132,17 +133,23 @@ def _compact_tool_parameters(parameters: Any) -> Any:
     return compact or None
 
 
-def compact_tools_for_prompt(tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    return [deepcopy(tool) for tool in tools or [] if isinstance(tool, dict)]
+def compact_tools_for_prompt(tools: Optional[List[Any]]) -> List[Dict[str, Any]]:
+    compact_tools: List[Dict[str, Any]] = []
+    for tool in tools or []:
+        tool_payload = model_dump_compat(tool)
+        if isinstance(tool_payload, dict):
+            compact_tools.append(deepcopy(tool_payload))
+    return compact_tools
 
 
 def get_allowed_tool_names(request: OpenAIRequest) -> Set[str]:
     allowed_names: Set[str] = set()
     for tool in request.tools or []:
-        if not isinstance(tool, dict):
+        tool_payload = model_dump_compat(tool)
+        if not isinstance(tool_payload, dict):
             continue
 
-        function_payload = tool.get("function")
+        function_payload = tool_payload.get("function")
         if not isinstance(function_payload, dict):
             continue
 
@@ -153,12 +160,13 @@ def get_allowed_tool_names(request: OpenAIRequest) -> Set[str]:
     return allowed_names
 
 
-def _count_complex_tool_schemas(tools: Optional[List[Dict[str, Any]]]) -> int:
+def _count_complex_tool_schemas(tools: Optional[List[Any]]) -> int:
     count = 0
     for tool in tools or []:
-        if not isinstance(tool, dict):
+        tool_payload = model_dump_compat(tool)
+        if not isinstance(tool_payload, dict):
             continue
-        function_payload = tool.get("function")
+        function_payload = tool_payload.get("function")
         if not isinstance(function_payload, dict):
             continue
         parameters = function_payload.get("parameters")
@@ -278,9 +286,10 @@ def _build_execution_environment_guidance(tool_names: Set[str]) -> List[str]:
 
 
 def _build_tool_prompt_instructions(mode: ToolPromptMode, tool_choice: str) -> List[str]:
-    payload_schema = (
-        '{"type":"tool_calls","tool_calls":[{"name":"tool_name","arguments":{}}]} '
-        'or {"type":"message","content":"final answer"}'
+    payload_schema = json.dumps(
+        build_tool_prompt_payload_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     tool_choice_guidance = _build_tool_choice_guidance(tool_choice)
     tool_response_guidance = _build_tool_response_guidance(tool_choice)

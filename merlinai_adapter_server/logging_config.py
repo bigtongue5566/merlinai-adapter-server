@@ -6,6 +6,7 @@ from loguru import logger
 
 from .config import LOG_BACKUP_COUNT, LOG_FILE_PATH, LOG_LEVEL_NAME, LOG_MAX_BYTES, LOG_TO_FILE
 from .request_logging import get_attempt, get_request_id
+from .schemas import model_dump_compat
 
 
 def configure_logger() -> None:
@@ -41,6 +42,7 @@ def configure_logger() -> None:
 
 
 def log_debug_payload(label: str, payload: Any) -> None:
+    payload = model_dump_compat(payload)
     if isinstance(payload, dict):
         request_id = get_request_id()
         attempt = get_attempt()

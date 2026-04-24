@@ -7,7 +7,15 @@ from fastapi import HTTPException
 
 from .logging_config import log_debug_payload
 from .request_logging import clear_request_log_context, set_attempt_context, set_request_log_context
-from .schemas import OpenAIRequest
+from .schemas import (
+    OpenAIChatCompletionChunk,
+    OpenAIChatCompletionResponse,
+    OpenAIChoice,
+    OpenAIRequest,
+    OpenAIResponseMessage,
+    OpenAIStreamChoice,
+    OpenAIStreamDelta,
+)
 from .tool_payload_parser import filter_allowed_tool_calls, resolve_payload_result, try_parse_payload_candidates
 from .tool_prompt import get_allowed_tool_names, normalize_tool_choice, should_force_tool_json
 
@@ -16,16 +24,25 @@ def _build_response_message(
     full_content: str,
     selected_message_content: Optional[str],
     all_tool_calls: List[Dict[str, Any]],
-) -> tuple[Dict[str, Any], str]:
-    response_message: Dict[str, Any] = {"role": "assistant", "content": selected_message_content or full_content or None}
+) -> tuple[OpenAIResponseMessage, str]:
+    response_message = OpenAIResponseMessage(content=selected_message_content or full_content or None)
     finish_reason = "stop"
 
     if all_tool_calls:
-        response_message["content"] = None
-        response_message["tool_calls"] = all_tool_calls
+        response_message = OpenAIResponseMessage(content=None, tool_calls=all_tool_calls)
         finish_reason = "tool_calls"
 
     return response_message, finish_reason
+
+
+def _dump_openai_response(response: OpenAIChatCompletionResponse) -> Dict[str, Any]:
+    payload = response.model_dump(exclude_none=True)
+    message = response.choices[0].message
+    message_payload: Dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        message_payload["tool_calls"] = [tool_call.model_dump() for tool_call in message.tool_calls]
+    payload["choices"][0]["message"] = message_payload
+    return payload
 
 
 def _validate_response_mode(
@@ -95,14 +112,13 @@ def build_openai_response(request: OpenAIRequest, full_content: str, response_to
         finish_reason,
     )
 
-    return {
-        "id": f"chatcmpl-{uuid.uuid4()}",
-        "object": "chat.completion",
-        "created": int(datetime.datetime.now().timestamp()),
-        "model": request.model,
-        "choices": [{"index": 0, "message": response_message, "finish_reason": finish_reason}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-    }
+    response = OpenAIChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        created=int(datetime.datetime.now().timestamp()),
+        model=request.model,
+        choices=[OpenAIChoice(message=response_message, finish_reason=finish_reason)],
+    )
+    return _dump_openai_response(response)
 
 
 def _build_stream_chunk(
@@ -112,17 +128,22 @@ def _build_stream_chunk(
     delta: Dict[str, Any],
     finish_reason: Optional[str],
 ) -> str:
+    chunk = OpenAIChatCompletionChunk(
+        id=response_id,
+        created=created,
+        model=model,
+        choices=[
+            OpenAIStreamChoice(
+                delta=OpenAIStreamDelta.model_validate(delta),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+    payload = chunk.model_dump(exclude_none=True)
+    payload["choices"][0]["finish_reason"] = finish_reason
     return (
         "data: "
-        + json.dumps(
-            {
-                "id": response_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-            }
-        )
+        + json.dumps(payload)
         + "\n\n"
     )
 
