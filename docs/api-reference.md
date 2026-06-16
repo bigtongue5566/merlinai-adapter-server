@@ -165,6 +165,8 @@ When `stream=true`, the adapter emits server-sent events in OpenAI chunk style:
 3. a final chunk with `finish_reason`
 4. `data: [DONE]`
 
+Regular chat requests without `tools` stream Merlin SSE text events through as OpenAI `content` deltas as they arrive. Requests with `tools` are buffered until the adapter can validate the complete tool payload, then emitted in OpenAI chunk format.
+
 ## `GET /v1/models`
 
 ### Example

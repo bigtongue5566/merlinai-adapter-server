@@ -22,7 +22,6 @@ app = FastAPI(title="merlinai-adapter-server")
 async def chat_completions(request: OpenAIRequest, authorization: Optional[str] = Header(default=None)):
     verify_adapter_api_key(authorization)
     request_id = str(uuid.uuid4())
-    should_clear_context = True
     set_request_log_context(request_id=request_id)
     try:
         log_debug_payload(
@@ -37,6 +36,18 @@ async def chat_completions(request: OpenAIRequest, authorization: Optional[str] 
                 "request": request.model_dump(exclude_none=True),
             },
         )
+        if request.stream and merlin_openai_client.can_stream_from_upstream(request):
+            stream_iterator = await run_in_threadpool(
+                merlin_openai_client.open_chat_completion_stream,
+                request,
+                request_id,
+            )
+            return StreamingResponse(
+                stream_iterator,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         result = await run_in_threadpool(merlin_openai_client.execute_chat_completion, request)
         log_debug_payload(
             "outgoing_openai_response",
@@ -49,16 +60,15 @@ async def chat_completions(request: OpenAIRequest, authorization: Optional[str] 
         )
 
         if request.stream:
-            should_clear_context = False
             return StreamingResponse(
                 build_streamed_openai_response(request, result.content, result.tool_calls, request_id=request_id),
                 media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         return result.response_payload
     finally:
-        if should_clear_context:
-            clear_request_log_context()
+        clear_request_log_context()
 
 
 @app.get("/v1/models")

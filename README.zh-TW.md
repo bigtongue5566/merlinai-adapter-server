@@ -13,14 +13,15 @@
 - adapter API key 驗證
 - Merlin 登入與 token refresh
 - prompt 與 payload 轉換
-- 串流與非串流回應
+- 上游即時串流與非串流回應
 - OpenAI `tool_calls` 相容層
 
 ## 主要功能
 
 - 支援 OpenAI 相容的 `POST /v1/chat/completions`
 - 支援 OpenAI 相容的 `GET /v1/models`
-- 支援串流與非串流回應
+- 非工具聊天請求支援 Merlin SSE 即時串流
+- 工具呼叫請求會在 payload 驗證後輸出串流相容回應
 - 自動取得與刷新 Merlin bearer token
 - 透過 `Authorization: Bearer <ADAPTER_API_KEY>` 保護 adapter 入口
 - 將 Merlin 輸出轉為 OpenAI `tool_calls` 的工具呼叫相容層

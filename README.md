@@ -13,14 +13,15 @@ It handles:
 - adapter API key validation
 - Merlin login and token refresh
 - prompt and payload transformation
-- streaming and non-streaming responses
+- live upstream streaming and non-streaming responses
 - tool-calling compatibility with OpenAI `tool_calls`
 
 ## Key Features
 
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-compatible `GET /v1/models`
-- Streaming and non-streaming response support
+- Live Merlin SSE streaming for non-tool chat requests
+- Streaming-compatible tool-call responses after payload validation
 - Automatic Merlin bearer token acquisition and refresh
 - Adapter-level API key protection via `Authorization: Bearer <ADAPTER_API_KEY>`
 - Tool-calling compatibility layer that maps Merlin output to OpenAI `tool_calls`

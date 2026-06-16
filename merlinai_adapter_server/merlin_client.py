@@ -2,7 +2,9 @@ import datetime
 import http.client
 import json
 import socket
-from typing import Any, Dict, List, Optional, Set
+import uuid
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -11,8 +13,8 @@ from .auth import token_manager
 from .config import MERLIN_API_URL, MERLIN_PATH, MERLIN_REQUEST_TIMEOUT_SECONDS, MERLIN_VERSION
 from .logging_config import log_debug_payload
 from .message_utils import build_non_tool_prompt, last_message_is_tool_output
-from .openai_response_builder import build_openai_response
-from .request_logging import set_attempt_context
+from .openai_response_builder import build_openai_response, build_stream_chunk
+from .request_logging import clear_request_log_context, set_attempt_context, set_request_log_context
 from .schemas import MerlinEvent, MerlinMessagePayload, MerlinPayload, OpenAIRequest, model_dump_compat
 from .tool_payload_parser import extract_tool_calls
 from .tool_prompt import (
@@ -23,6 +25,15 @@ from .tool_prompt import (
     should_force_tool_json,
     should_retry_tool_response,
 )
+
+
+@dataclass(frozen=True)
+class MerlinStreamEvent:
+    content_delta: str
+    tool_calls: List[Dict[str, Any]]
+    raw_event: Dict[str, Any]
+    raw_chunk: str
+
 
 class MerlinGateway:
     # Low-level Merlin transport: payload shaping, auth headers, HTTP call, and SSE parsing.
@@ -45,33 +56,51 @@ class MerlinGateway:
         merlin_payload: Dict[str, Any],
         allowed_tool_names: Optional[Set[str]] = None,
     ) -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
-        conn = http.client.HTTPSConnection(MERLIN_API_URL, timeout=MERLIN_REQUEST_TIMEOUT_SECONDS)
+        conn, res = self.open_request(merlin_payload)
         try:
-            headers = self._get_headers()
-            log_debug_payload(
-                "merlin_request_start",
-                {
-                    "host": MERLIN_API_URL,
-                    "path": MERLIN_PATH,
-                    "timeout_seconds": MERLIN_REQUEST_TIMEOUT_SECONDS,
-                },
-            )
-            try:
-                conn.request("POST", MERLIN_PATH, json.dumps(merlin_payload), headers)
-                res = conn.getresponse()
-            except socket.timeout as exc:
-                raise HTTPException(status_code=504, detail="Merlin request timed out") from exc
-            except OSError as exc:
-                raise HTTPException(status_code=502, detail="Merlin request failed") from exc
-
-            if res.status != 200:
-                error_body = res.read().decode("utf-8", errors="ignore")
-                log_debug_payload("merlin_non_stream_error", {"status": res.status, "body": error_body})
-                raise HTTPException(status_code=res.status, detail=error_body)
-
             return self._read_event_stream(res, allowed_tool_names)
         finally:
             conn.close()
+
+    def open_request(
+        self,
+        merlin_payload: Dict[str, Any],
+    ) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse]:
+        conn = http.client.HTTPSConnection(MERLIN_API_URL, timeout=MERLIN_REQUEST_TIMEOUT_SECONDS)
+        try:
+            return conn, self._open_response(conn, merlin_payload)
+        except Exception:
+            conn.close()
+            raise
+
+    def _open_response(
+        self,
+        conn: http.client.HTTPSConnection,
+        merlin_payload: Dict[str, Any],
+    ) -> http.client.HTTPResponse:
+        headers = self._get_headers()
+        log_debug_payload(
+            "merlin_request_start",
+            {
+                "host": MERLIN_API_URL,
+                "path": MERLIN_PATH,
+                "timeout_seconds": MERLIN_REQUEST_TIMEOUT_SECONDS,
+            },
+        )
+        try:
+            conn.request("POST", MERLIN_PATH, json.dumps(merlin_payload), headers)
+            res = conn.getresponse()
+        except socket.timeout as exc:
+            raise HTTPException(status_code=504, detail="Merlin request timed out") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=502, detail="Merlin request failed") from exc
+
+        if res.status != 200:
+            error_body = res.read().decode("utf-8", errors="ignore")
+            log_debug_payload("merlin_non_stream_error", {"status": res.status, "body": error_body})
+            raise HTTPException(status_code=res.status, detail=error_body)
+
+        return res
 
     def _get_headers(self) -> Dict[str, str]:
         now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
@@ -97,6 +126,19 @@ class MerlinGateway:
         raw_events: List[Dict[str, Any]] = []
         raw_chunks: List[str] = []
 
+        for stream_event in self.iter_event_stream(res, allowed_tool_names):
+            full_content += stream_event.content_delta
+            response_tool_calls.extend(stream_event.tool_calls)
+            raw_events.append(stream_event.raw_event)
+            raw_chunks.append(stream_event.raw_chunk)
+
+        return full_content, response_tool_calls, raw_events, raw_chunks
+
+    def iter_event_stream(
+        self,
+        res: http.client.HTTPResponse,
+        allowed_tool_names: Optional[Set[str]] = None,
+    ) -> Iterator[MerlinStreamEvent]:
         while True:
             try:
                 line = res.readline()
@@ -116,20 +158,21 @@ class MerlinGateway:
                 continue
             if data_str == "[DONE]":
                 break
-            raw_chunks.append(data_str)
 
             try:
                 merlin_event = MerlinEvent.model_validate_json(data_str)
-                raw_events.append(merlin_event.model_dump(exclude_none=True))
+                raw_event = merlin_event.model_dump(exclude_none=True)
                 inner_data = merlin_event.data.model_dump(exclude_none=True)
                 text = merlin_event.data.text or ""
                 content = merlin_event.data.content or ""
-                full_content += text or content
-                response_tool_calls.extend(extract_tool_calls(inner_data, allowed_tool_names))
+                yield MerlinStreamEvent(
+                    content_delta=text or content,
+                    tool_calls=extract_tool_calls(inner_data, allowed_tool_names),
+                    raw_event=raw_event,
+                    raw_chunk=data_str,
+                )
             except (json.JSONDecodeError, ValidationError):
                 continue
-
-        return full_content, response_tool_calls, raw_events, raw_chunks
 
 
 class ChatCompletionContext(BaseModel):
@@ -173,6 +216,9 @@ class MerlinOpenAIClient:
     # High-level OpenAI-compatible client built on top of the raw Merlin gateway.
     def __init__(self, gateway: MerlinGateway) -> None:
         self._gateway = gateway
+
+    def can_stream_from_upstream(self, request: OpenAIRequest) -> bool:
+        return not should_force_tool_json(request)
 
     def execute_chat_completion(
         self,
@@ -234,6 +280,144 @@ class MerlinOpenAIClient:
             tool_calls=response_tool_calls,
             raw_events=raw_events,
         )
+
+    def open_chat_completion_stream(
+        self,
+        request: OpenAIRequest,
+        request_id: str | None = None,
+    ) -> Iterator[str]:
+        if request_id:
+            set_request_log_context(request_id=request_id, attempt="initial")
+        else:
+            set_attempt_context("initial")
+
+        conn: http.client.HTTPSConnection | None = None
+        try:
+            context = ChatCompletionContext.from_request(request)
+            merlin_payload = self._build_merlin_payload(
+                request,
+                context,
+                prompt_mode="strict",
+            )
+            conn, res = self._gateway.open_request(merlin_payload)
+            return self._iter_openai_stream_chunks(
+                request=request,
+                context=context,
+                conn=conn,
+                res=res,
+                request_id=request_id,
+            )
+        except Exception:
+            if conn is not None:
+                conn.close()
+            raise
+        finally:
+            if request_id:
+                clear_request_log_context()
+            else:
+                set_attempt_context(None)
+
+    def _iter_openai_stream_chunks(
+        self,
+        *,
+        request: OpenAIRequest,
+        context: ChatCompletionContext,
+        conn: http.client.HTTPSConnection,
+        res: http.client.HTTPResponse,
+        request_id: str | None = None,
+    ) -> Iterator[str]:
+        if request_id:
+            set_request_log_context(request_id=request_id, attempt="initial")
+        else:
+            set_attempt_context("initial")
+
+        response_id = f"chatcmpl-{uuid.uuid4()}"
+        created = int(datetime.datetime.now().timestamp())
+        full_content = ""
+        response_tool_calls: List[Dict[str, Any]] = []
+        raw_events: List[Dict[str, Any]] = []
+        raw_chunks: List[str] = []
+        request_log_context = {"request_id": request_id} if request_id else {}
+        attempt_log_context = {**request_log_context, "attempt": "initial"}
+
+        try:
+            yield build_stream_chunk(
+                response_id=response_id,
+                created=created,
+                model=request.model,
+                delta={"role": "assistant"},
+                finish_reason=None,
+            )
+
+            for stream_event in self._gateway.iter_event_stream(res, context.allowed_tool_names):
+                raw_events.append(stream_event.raw_event)
+                raw_chunks.append(stream_event.raw_chunk)
+                response_tool_calls.extend(stream_event.tool_calls)
+                full_content += stream_event.content_delta
+
+                if stream_event.content_delta:
+                    yield build_stream_chunk(
+                        response_id=response_id,
+                        created=created,
+                        model=request.model,
+                        delta={"content": stream_event.content_delta},
+                        finish_reason=None,
+                    )
+
+            log_debug_payload(
+                "merlin_raw_response",
+                {
+                    "prompt_mode": "strict",
+                    "event_count": len(raw_events),
+                    "raw_event_chunks": raw_chunks,
+                    "raw_events": raw_events,
+                    "assembled_content": full_content,
+                    "tool_calls": response_tool_calls,
+                    **attempt_log_context,
+                },
+            )
+            log_debug_payload(
+                "merlin_attempt_summary",
+                {
+                    "prompt_mode": "strict",
+                    "previous_response": None,
+                    "event_count": len(raw_events),
+                    "assembled_content": full_content,
+                    "tool_call_count": len(response_tool_calls),
+                    **attempt_log_context,
+                },
+            )
+            set_attempt_context(None)
+            log_debug_payload(
+                "streamed_openai_response_summary",
+                {
+                    "response_id": response_id,
+                    "finish_reason": "stop",
+                    "tool_call_names": [
+                        tool_call.get("function", {}).get("name")
+                        for tool_call in response_tool_calls
+                        if isinstance(tool_call, dict)
+                    ],
+                    "content_preview": full_content[:300],
+                    "upstream_stream": True,
+                    **request_log_context,
+                },
+            )
+
+            yield build_stream_chunk(
+                response_id=response_id,
+                created=created,
+                model=request.model,
+                delta={},
+                finish_reason="stop",
+            )
+            yield "data: [DONE]\n\n"
+        finally:
+            conn.close()
+            if request_id:
+                clear_request_log_context()
+            else:
+                set_attempt_context(None)
 
     def _send_request(
         self,
