@@ -4,14 +4,15 @@ from typing import Any, Dict
 from .schemas import OpenAIModel, OpenAIModelsResponse
 
 SUPPORTED_MODELS = (
-    "gpt-5.4",
-    "grok-4.1-fast",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-pro",
     "claude-4.6-sonnet",
-    "claude-4.6-opus",
-    "glm-5",
-    "minimax-m2.5",
+    "claude-4.8-opus",
+    "deepseek-v4-pro",
+    "gemini-3.5-flash",
+    "glm-5.1",
+    "gpt-5.5",
+    "grok-4.3",
+    "kimi-k2.6",
+    "minimax-m2.7",
 )
 
 
