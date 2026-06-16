@@ -173,7 +173,7 @@ def build_markdown_report(results: list[dict[str, Any]], model: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare Merlin tool transport modes")
-    parser.add_argument("--model", default="gpt-5.4")
+    parser.add_argument("--model", default="gpt-5.5")
     parser.add_argument(
         "--tool-choice",
         nargs="+",

@@ -97,7 +97,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-123" \
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.5",
     "messages": [
       {"role": "user", "content": "What is the weather in Taipei?"}
     ],
@@ -181,7 +181,7 @@ curl http://localhost:8000/v1/models \
   "object": "list",
   "data": [
     {
-      "id": "gpt-5.4",
+      "id": "gpt-5.5",
       "object": "model",
       "created": 1710000000,
       "owned_by": "merlin"
@@ -192,14 +192,15 @@ curl http://localhost:8000/v1/models \
 
 Published model IDs:
 
-- `gpt-5.4`
-- `grok-4.1-fast`
-- `gemini-3.1-flash-lite`
-- `gemini-3.1-pro`
 - `claude-4.6-sonnet`
-- `claude-4.6-opus`
-- `glm-5`
-- `minimax-m2.5`
+- `claude-4.8-opus`
+- `deepseek-v4-pro`
+- `gemini-3.5-flash`
+- `glm-5.1`
+- `gpt-5.5`
+- `grok-4.3`
+- `kimi-k2.6`
+- `minimax-m2.7`
 
 ## Error Behavior
 
