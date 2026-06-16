@@ -121,7 +121,7 @@ def build_openai_response(request: OpenAIRequest, full_content: str, response_to
     return _dump_openai_response(response)
 
 
-def _build_stream_chunk(
+def build_stream_chunk(
     response_id: str,
     created: int,
     model: str,
@@ -146,6 +146,16 @@ def _build_stream_chunk(
         + json.dumps(payload)
         + "\n\n"
     )
+
+
+def _build_stream_chunk(
+    response_id: str,
+    created: int,
+    model: str,
+    delta: Dict[str, Any],
+    finish_reason: Optional[str],
+) -> str:
+    return build_stream_chunk(response_id, created, model, delta, finish_reason)
 
 
 def build_streamed_openai_response(
@@ -175,7 +185,7 @@ def build_streamed_openai_response(
             },
         )
 
-        yield _build_stream_chunk(
+        yield build_stream_chunk(
             response_id=response_id,
             created=created,
             model=request.model,
@@ -185,7 +195,7 @@ def build_streamed_openai_response(
 
         if finish_reason == "tool_calls":
             for index, tool_call in enumerate(message["tool_calls"]):
-                yield _build_stream_chunk(
+                yield build_stream_chunk(
                     response_id=response_id,
                     created=created,
                     model=request.model,
@@ -204,7 +214,7 @@ def build_streamed_openai_response(
                     },
                     finish_reason=None,
                 )
-            yield _build_stream_chunk(
+            yield build_stream_chunk(
                 response_id=response_id,
                 created=created,
                 model=request.model,
@@ -216,7 +226,7 @@ def build_streamed_openai_response(
 
         content = message.get("content") or ""
         if content:
-            yield _build_stream_chunk(
+            yield build_stream_chunk(
                 response_id=response_id,
                 created=created,
                 model=request.model,
@@ -224,7 +234,7 @@ def build_streamed_openai_response(
                 finish_reason=None,
             )
 
-        yield _build_stream_chunk(
+        yield build_stream_chunk(
             response_id=response_id,
             created=created,
             model=request.model,

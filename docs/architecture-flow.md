@@ -21,6 +21,8 @@ For setup and day-to-day usage, start with the [root README](../README.md). This
 8. If needed, the adapter performs a `repair` or `agentic_repair` retry.
 9. The response is returned as either standard JSON or an OpenAI-style streaming response.
 
+For regular chat requests with `stream=true` and no `tools`, `app.py` uses `open_chat_completion_stream()` to open the Merlin SSE response before returning `StreamingResponse`; each Merlin text event is mapped directly to an OpenAI `content` delta. Tool-calling requests keep the buffered path so the adapter can validate structured payloads and run repair attempts before emitting `tool_calls`.
+
 ## Request Flow Diagram
 
 ```mermaid
