@@ -72,7 +72,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-123" \
   -d '{
-    "model": "claude-4.6-sonnet",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": false
   }'
@@ -111,15 +111,25 @@ For request and response examples, see [API reference](docs/api-reference.md).
 
 ## Supported Models
 
-- `claude-4.6-sonnet`
-- `claude-4.8-opus`
+- `claude-opus-5`
+- `claude-sonnet-5`
+- `deepseek-v4-flash`
 - `deepseek-v4-pro`
-- `gemini-3.5-flash`
-- `glm-5.1`
+- `gemini-3.1-flash-lite`
+- `gemini-3.8-flash`
+- `glm-5.3`
+- `glm-5.3-flash`
 - `gpt-5.5`
-- `grok-4.3`
-- `kimi-k2.6`
-- `minimax-m2.7`
+- `gpt-5.6-luna`
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
+- `gpt-6-astra`
+- `grok-4.6`
+- `kimi-k3`
+- `minimax-m3`
+- `qwen-3.8-max`
+
+Model list verified on 2026-09-17 against [Merlin's official configuration](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json). Only active text models (`textLLMs` with `archived=false`) are published.
 
 ## Configuration
 

@@ -82,6 +82,35 @@ LOG_TO_FILE=false
 
 ## Helper Scripts
 
+### Verify the model catalog and live chat functionality
+
+Merlin's web model selector loads `textLLMs` from
+[`merlin_constants.json`](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json).
+Use entries with `archived=false` when updating `models_catalog.py` and the three
+published lists in the READMEs and API reference. The model enum embedded in the
+web JavaScript bundle can lag behind this configuration.
+
+Run a short chat against every published model:
+
+```bash
+uv run python scripts/smoke_test_models.py
+```
+
+Run chat, SSE chat, required tool calls, and streamed tool calls:
+
+```bash
+uv run python scripts/smoke_test_models.py --modes chat chat-stream tool tool-stream --out logs/model-smoke.json
+```
+
+To limit the run, use `--models gpt-5.6-luna` and/or `--modes chat`.
+These checks use FastAPI's in-process HTTP test client with **real Merlin upstream
+requests**, the credentials in `.env`, and account query quota. They check API
+authentication, request validation, catalog consistency, response schemas,
+expected reply content, SSE termination, and tool names/arguments. They do not
+execute the requested tool or verify a deployed server or proxy. Reports contain
+statuses and timings, with no credentials or upstream response bodies. A failed
+case produces a nonzero exit code. This is a smoke check, not a reliability benchmark.
+
 ### Build a Markdown report from adapter logs
 
 ```bash
