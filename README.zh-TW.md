@@ -72,7 +72,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-123" \
   -d '{
-    "model": "claude-4.6-sonnet",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "你好"}],
     "stream": false
   }'
@@ -111,15 +111,25 @@ docker compose down
 
 ## 支援模型
 
-- `claude-4.6-sonnet`
-- `claude-4.8-opus`
+- `claude-opus-5`
+- `claude-sonnet-5`
+- `deepseek-v4-flash`
 - `deepseek-v4-pro`
-- `gemini-3.5-flash`
-- `glm-5.1`
+- `gemini-3.1-flash-lite`
+- `gemini-3.8-flash`
+- `glm-5.3`
+- `glm-5.3-flash`
 - `gpt-5.5`
-- `grok-4.3`
-- `kimi-k2.6`
-- `minimax-m2.7`
+- `gpt-5.6-luna`
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
+- `gpt-6-astra`
+- `grok-4.6`
+- `kimi-k3`
+- `minimax-m3`
+- `qwen-3.8-max`
+
+模型清單於 2026-09-17 核對 [Merlin 官方設定](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json)，僅公布未封存的文字模型（`textLLMs` 中 `archived=false`）。
 
 ## 環境設定
 
