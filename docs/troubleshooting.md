@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide covers the most common startup, authentication, upstream, and tool-calling issues for `merlinai-adapter-server`.
+This guide covers the most common startup, authentication, upstream, and request-validation issues for `merlinai-adapter-server`.
 
 For setup and examples, see the [root README](../README.md). For request flow details, see [Architecture flow](architecture-flow.md). For tool-mode internals, see [Development notes](development-notes.md).
 
@@ -117,47 +117,31 @@ Checks:
 - provide user content as a string or a supported content-part structure
 - avoid sending empty content arrays or arrays without text-bearing fields
 
-## Tool-Calling Problems
+## Tool and Prompt Policy
 
-### `422 Tool calling was required, but upstream did not return a valid tool call payload`
+Check `TOOL_CALL_MODE` and restart after changing it. Native caller tools failed
+the live OpenCode check. Use `emulated` for the tested prompt-based read-and-answer
+workflow; see [tool mode behavior](emulated-tool-calling.md). This mode supports
+required/named choices and validates JSON Schema arguments. A malformed response
+fails with `502` or SSE error; it is not repaired or silently retried. Tool-round
+content appears only after the whole upstream response has been validated.
 
-Cause:
+The following rules describe `TOOL_CALL_MODE=native`:
 
-- the request required tool use, but Merlin responded with plain text or malformed structured output
+The adapter does not add Merlin's browser or MCP tools. Omitted, `null`, and
+`auto` `tool_choice` values forward caller schemas; only the literal string
+`none` sends an empty tool list. `required`, named-function, and invalid
+selectors return `422` before any network request because this capability is
+not verified upstream.
 
-Checks:
+Caller-supplied schemas are accepted and forwarded, but their live Merlin
+behavior is unverified. A native tool event must contain a non-empty `id`, a
+declared name, and valid JSON object arguments. Malformed or undeclared events
+return `502`; ordinary JSON-looking text remains text. In streaming mode, the
+adapter sends `event: error` and omits a successful finish and `[DONE]`.
 
-- verify the request includes a valid `tools` array
-- confirm `tool_choice` matches the intended behavior
-- inspect `structured_payload_resolution` in debug logs
-- compare event-level tool calls with payload-level tool calls
-
-### `422 Specific tool call was required (...)`
-
-Cause:
-
-- the request required a named function, but the returned tool call did not match or was not usable
-
-Checks:
-
-- verify the function name in `tool_choice`
-- verify the same function name appears in `tools`
-- confirm the tool schema is not being over-trimmed by prompt compaction settings
-
-### Tool mode is enabled but output still looks like plain text
-
-Possible reasons:
-
-- Merlin returned content instead of structured tool payload
-- payload JSON was malformed beyond repair
-- the tool call was filtered out because it was not in the allowed list
-
-Checks:
-
-- inspect `merlin_raw_response`
-- inspect `structured_payload_resolution`
-- inspect `merlin_attempt_summary`
-- review the final `outgoing_openai_response`
+The native path preserves the caller's message history and does not inject
+extra prompts, flatten messages, repair JSON, or perform hidden retries.
 
 ## Logging and Diagnostics
 
@@ -170,12 +154,9 @@ LOG_LEVEL=DEBUG
 Useful debug events:
 
 - `incoming_chat_request`
-- `tool_prompt_metrics`
-- `non_tool_prompt_metrics`
 - `outgoing_merlin_payload`
 - `merlin_raw_response`
 - `merlin_attempt_summary`
-- `structured_payload_resolution`
 - `outgoing_openai_response`
 - `streamed_openai_response_summary`
 
@@ -197,13 +178,14 @@ Build a Markdown summary from logs:
 uv run python scripts/build_log_report.py --log logs/adapter.log --out logs/report.md
 ```
 
-Compare tool transport modes:
-
-```bash
-uv run python scripts/compare_tool_transport_modes.py
-```
-
 ## If You Need More Detail
+
+For GLM/OpenCode `Emulated tool response is missing its complete payload envelope`,
+see the [2026-09-19 format fix](glm-opencode-format-fix-2026-09-19.md).
+The adapter tolerates commentary around one marked JSON payload and a missing
+closing text marker only after a complete JSON value at EOF. Malformed JSON still
+fails; `emulated_response_invalid` logs report lengths and token counts without
+including prompt or tool contents.
 
 - [API reference](api-reference.md)
 - [Architecture flow](architecture-flow.md)

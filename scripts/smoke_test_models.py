@@ -19,7 +19,7 @@ os.environ["LOG_TO_FILE"] = "false"
 from fastapi.testclient import TestClient
 
 from merlinai_adapter_server import app
-from merlinai_adapter_server.config import ADAPTER_API_KEY
+from merlinai_adapter_server.config import ADAPTER_API_KEY, MERLIN_VERSION, TOOL_CALL_MODE
 from merlinai_adapter_server.models_catalog import SUPPORTED_MODELS
 from merlinai_adapter_server.schemas import OpenAIChatCompletionChunk, OpenAIChatCompletionResponse
 
@@ -67,7 +67,10 @@ def run_case(case: tuple[str, str]) -> dict:
             if tool_mode else f"Reply with exactly {MARKER} and nothing else."
         )}],
         "stream": stream,
+        "max_tokens": 1000,
     }
+    if stream:
+        request["stream_options"] = {"include_usage": True}
     if tool_mode:
         request.update(tools=[TOOL], tool_choice="required")
     try:
@@ -78,6 +81,10 @@ def run_case(case: tuple[str, str]) -> dict:
         if stream:
             check(response.headers["content-type"].startswith("text/event-stream"), "Wrong content type")
             events = [line[5:].strip() for line in response.text.splitlines() if line.startswith("data:")]
+            for event in events:
+                if event != "[DONE]":
+                    error = json.loads(event).get("error")
+                    check(not error, f"SSE error: {error}")
             check(bool(events) and events[-1] == "[DONE]", "Missing SSE terminator")
             chunks = [json.loads(event) for event in events[:-1]]
             check(len(chunks) >= 3, "Missing SSE chunks")
@@ -86,8 +93,10 @@ def run_case(case: tuple[str, str]) -> dict:
                 check(chunk["model"] == model, "Wrong response model")
                 check(chunk["id"] == chunks[0]["id"], "Inconsistent stream ID")
             check(chunks[0]["choices"][0]["delta"].get("role") == "assistant", "Missing assistant role")
-            choices = [chunk["choices"][0] for chunk in chunks]
+            choices = [chunk["choices"][0] for chunk in chunks if chunk["choices"]]
             check(choices[-1]["finish_reason"] == ("tool_calls" if tool_mode else "stop"), "Wrong finish reason")
+            usage_chunks = [chunk for chunk in chunks if chunk.get("usage")]
+            check(bool(usage_chunks), "Missing usage chunk")
             if tool_mode:
                 calls: dict[int, dict] = {}
                 for choice in choices:
@@ -107,6 +116,7 @@ def run_case(case: tuple[str, str]) -> dict:
             body = response.json()
             OpenAIChatCompletionResponse.model_validate(body)
             check(body["model"] == model, "Wrong response model")
+            check(body["usage"]["total_tokens"] >= 0, "Missing usage")
             choice = body["choices"][0]
             check(choice["finish_reason"] == ("tool_calls" if tool_mode else "stop"), "Wrong finish reason")
             if tool_mode:
@@ -143,7 +153,9 @@ def main() -> int:
         results = list(pool.map(run_case, [(model, mode) for model in args.models for mode in args.modes]))
     report = {
         "checked_at": datetime.now(timezone.utc).isoformat(),
+        "merlin_version": MERLIN_VERSION,
         "transport": "FastAPI TestClient -> real Merlin upstream; no mocked responses",
+        "tool_call_mode": TOOL_CALL_MODE,
         "local_checks": ["models auth", "chat auth", "model catalog", "request validation"],
         "results": results,
         "passed": sum(result["passed"] for result in results),

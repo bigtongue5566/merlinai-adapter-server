@@ -121,26 +121,65 @@ def build_openai_response(request: OpenAIRequest, full_content: str, response_to
     return _dump_openai_response(response)
 
 
+def _openai_usage(raw_usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """Map native extension token counters to OpenAI response fields."""
+    tokens = raw_usage.get("tokens", raw_usage) if isinstance(raw_usage, dict) else {}
+    if not isinstance(tokens, dict):
+        tokens = {}
+    prompt = tokens.get("input", tokens.get("prompt", 0))
+    completion = tokens.get("output", tokens.get("completion", 0))
+    prompt = prompt if isinstance(prompt, int) and prompt >= 0 else 0
+    completion = completion if isinstance(completion, int) and completion >= 0 else 0
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+
+
+def build_native_openai_response(
+    request: OpenAIRequest,
+    full_content: str,
+    response_tool_calls: List[Dict[str, Any]],
+    usage: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build an OpenAI response from native extension events."""
+    allowed_names = get_allowed_tool_names(request)
+    filtered_calls = filter_allowed_tool_calls(response_tool_calls, allowed_names) if allowed_names else []
+    if response_tool_calls and not allowed_names:
+        raise HTTPException(status_code=502, detail="Merlin returned tool calls without declared tools")
+    if len(filtered_calls) != len(response_tool_calls):
+        raise HTTPException(status_code=502, detail="Merlin returned an undeclared tool call")
+    response_message, finish_reason = _build_response_message(full_content, full_content or None, filtered_calls)
+    response = OpenAIChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        created=int(datetime.datetime.now().timestamp()),
+        model=request.model,
+        choices=[OpenAIChoice(message=response_message, finish_reason=finish_reason)],
+        usage=_openai_usage(usage),
+    )
+    return _dump_openai_response(response)
+
+
 def build_stream_chunk(
     response_id: str,
     created: int,
     model: str,
     delta: Dict[str, Any],
     finish_reason: Optional[str],
+    usage: Optional[Dict[str, Any]] = None,
 ) -> str:
     chunk = OpenAIChatCompletionChunk(
         id=response_id,
         created=created,
         model=model,
-        choices=[
+        choices=[] if usage is not None else [
             OpenAIStreamChoice(
                 delta=OpenAIStreamDelta.model_validate(delta),
                 finish_reason=finish_reason,
             )
         ],
+        usage=_openai_usage(usage) if usage is not None else None,
     )
     payload = chunk.model_dump(exclude_none=True)
-    payload["choices"][0]["finish_reason"] = finish_reason
+    if payload["choices"]:
+        payload["choices"][0]["finish_reason"] = finish_reason
     return (
         "data: "
         + json.dumps(payload)
@@ -154,8 +193,9 @@ def _build_stream_chunk(
     model: str,
     delta: Dict[str, Any],
     finish_reason: Optional[str],
+    usage: Optional[Dict[str, Any]] = None,
 ) -> str:
-    return build_stream_chunk(response_id, created, model, delta, finish_reason)
+    return build_stream_chunk(response_id, created, model, delta, finish_reason, usage)
 
 
 def build_streamed_openai_response(

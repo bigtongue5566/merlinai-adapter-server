@@ -11,7 +11,9 @@ class FlexibleModel(BaseModel):
 
 
 class ContentPart(FlexibleModel):
-    model_config = ConfigDict(extra="ignore")
+    # Preserve extension content parts (for example image_url) without
+    # narrowing the native messages contract to text-only requests.
+    model_config = ConfigDict(extra="allow")
 
     type: Optional[str] = None
     text: Optional[str] = None
@@ -62,7 +64,8 @@ class OpenAIToolCall(FlexibleModel):
 
 
 class Message(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    # Native extension messages may carry `_tag` and other provider metadata.
+    model_config = ConfigDict(extra="allow")
 
     role: str
     name: Optional[str] = None
@@ -79,6 +82,15 @@ class OpenAIRequest(BaseModel):
     stream: Optional[bool] = False
     tools: Optional[List[ToolDefinition]] = None
     tool_choice: Optional[Union[str, ToolChoiceObject]] = None
+    max_tokens: Optional[int] = Field(default=None, gt=0)
+    stream_options: Optional[Dict[str, bool]] = None
+
+    @field_validator("stream_options")
+    @classmethod
+    def _validate_stream_options(cls, value: Optional[Dict[str, bool]]) -> Optional[Dict[str, bool]]:
+        if value is not None and set(value) - {"include_usage"}:
+            raise ValueError("Only stream_options.include_usage is supported")
+        return value
 
 
 class NormalizedFunctionCall(BaseModel):
@@ -161,6 +173,7 @@ class OpenAIChatCompletionChunk(BaseModel):
     created: int
     model: str
     choices: List[OpenAIStreamChoice]
+    usage: Optional[OpenAIUsage] = None
 
 
 class OpenAIModel(BaseModel):

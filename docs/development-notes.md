@@ -4,48 +4,41 @@ This document collects implementation-heavy details that do not belong on the pr
 
 For setup and usage, see the [root README](../README.md). For internal request flow and module ownership, see [Architecture Flow](architecture-flow.md).
 
-## Tool-Calling Transport Strategy
+## Native Extension Transport
 
-When the incoming OpenAI-style request includes `tools`, the adapter switches into a stricter compatibility mode designed to improve Merlin's chance of returning usable tool calls.
+The default `TOOL_CALL_MODE=native` path preserves the caller's system, developer, assistant,
+user, and tool messages. It does not flatten history into a generated prompt,
+add hidden instructions, register Merlin browser/MCP tools, or retry with a
+repair prompt. This keeps the adapter's behavior predictable and leaves
+conversation policy with the caller.
 
-Current behavior:
+`tool_choice` policy is intentionally narrow: omitted, `null`, and `auto`
+forward caller-supplied schemas; only the literal string `none` sends an empty
+`params.tools` list. `required`, named selectors, and invalid selectors return
+`422` before network I/O because this upstream capability is not verified.
 
-- `metadata.mcpConfig.isEnabled` is forced to `false`
-- `metadata.webAccess` is forced to `true`
-- Tool schema is preserved in prompt JSON instead of relying on Merlin-side MCP injection
-- The adapter asks Merlin for a structured payload that can be converted into OpenAI `tool_calls`
+Caller-supplied tool schemas are forwarded for compatibility, but live Merlin
+support remains unverified. Native tool events are accepted only when they
+have a non-empty `id`, a declared `name`, and valid JSON object arguments.
+Malformed or undeclared events fail with `502`; ordinary text is never repaired
+into a tool call.
 
-The goal is to avoid false-success responses where a client required tool usage but Merlin only returned natural-language content.
+## Emulated Tool Mode
 
-## Structured Payload Parsing
+The explicit `TOOL_CALL_MODE=emulated` path is implemented in `emulated_tools.py`.
+It adds a strict output protocol only when caller tools are enabled, translates
+tool history into full text records, and validates the completed JSON and
+parameter schemas before exposing calls. It reuses the extension gateway and
+OpenAI response builders, with no JSON repair, hidden retry, or mode fallback.
+See [tool mode behavior](emulated-tool-calling.md).
 
-Tool-call data can arrive from more than one place:
+## Legacy Comparison Modules
 
-- event-level tool call information in Merlin SSE output
-- structured JSON payload blocks embedded in generated content
-- repaired JSON reconstructed from malformed payloads
-
-`tool_payload_parser.py` is responsible for:
-
-- locating `<OPENAI_TOOL_PAYLOAD>...</OPENAI_TOOL_PAYLOAD>` blocks
-- repairing malformed JSON when possible
-- extracting tool calls
-- filtering calls against the allowed tool list
-- resolving whether the final result should be treated as `message` content or `tool_calls`
-
-## Repair Behavior
-
-The adapter can issue follow-up attempts in two cases.
-
-### `repair`
-
-Used when Merlin returns a malformed structured payload that looks recoverable. The retry prompt asks for a cleaner, parseable payload instead of silently accepting broken output.
-
-### `agentic_repair`
-
-Used only in narrower tool-calling cases, typically when `tool_choice=auto` suggests the model should still be interacting with tools but instead ends early with a plain assistant message.
-
-This retry is intended as a recovery path, not a guaranteed second pass for every tool request.
+The prompt compaction, structured-output repair, and comparison helpers in
+`tool_prompt.py`, `tool_payload_parser.py`, and related modules are retained
+only for historical diagnostics. They are not called by the normal extension
+transport. The old comparison CLI is retired before any upstream network
+request, so it must not be used as a health check or as a fallback path.
 
 ## Logging and Debug Reference
 
@@ -58,20 +51,16 @@ LOG_LEVEL=DEBUG
 Useful debug events include:
 
 - `incoming_chat_request`
-- `tool_prompt_metrics`
-- `non_tool_prompt_metrics`
 - `outgoing_merlin_payload`
 - `merlin_raw_response`
 - `merlin_attempt_summary`
-- `structured_payload_resolution`
-- `agentic_repair_skipped`
 - `outgoing_openai_response`
 - `streamed_openai_response_summary`
 
 Correlation behavior:
 
 - every request gets a `request_id`
-- retries also carry an `attempt` value such as `initial`, `repair`, or `agentic_repair`
+- the native transport does not issue hidden repair or agentic retries
 - File logging writes to `logs/adapter.log` when `LOG_TO_FILE=true`
 
 If you want console-only logging:
@@ -96,18 +85,19 @@ Run a short chat against every published model:
 uv run python scripts/smoke_test_models.py
 ```
 
-Run chat, SSE chat, required tool calls, and streamed tool calls:
+Run text chat and SSE chat:
 
 ```bash
-uv run python scripts/smoke_test_models.py --modes chat chat-stream tool tool-stream --out logs/model-smoke.json
+uv run python scripts/smoke_test_models.py --modes chat chat-stream --out logs/model-smoke.json
 ```
 
 To limit the run, use `--models gpt-5.6-luna` and/or `--modes chat`.
 These checks use FastAPI's in-process HTTP test client with **real Merlin upstream
 requests**, the credentials in `.env`, and account query quota. They check API
 authentication, request validation, catalog consistency, response schemas,
-expected reply content, SSE termination, and tool names/arguments. They do not
-execute the requested tool or verify a deployed server or proxy. Reports contain
+expected reply content, usage, and SSE termination. Tool schemas are not part
+of the normal health check because their live upstream behavior is unverified.
+They do not execute a requested tool or verify a deployed server or proxy. Reports contain
 statuses and timings, with no credentials or upstream response bodies. A failed
 case produces a nonzero exit code. This is a smoke check, not a reliability benchmark.
 
@@ -115,12 +105,6 @@ case produces a nonzero exit code. This is a smoke check, not a reliability benc
 
 ```bash
 uv run python scripts/build_log_report.py --log logs/adapter.log --out logs/report.md
-```
-
-### Compare tool transport modes
-
-```bash
-uv run python scripts/compare_tool_transport_modes.py
 ```
 
 ## Finding the Firebase API Key

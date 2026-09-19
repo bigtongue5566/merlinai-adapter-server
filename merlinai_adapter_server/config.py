@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -18,7 +18,8 @@ class AdapterSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     merlin_api_url: str = "www.getmerlin.in"
-    merlin_path: str = "/arcane/api/v2/thread/unified"
+    merlin_path: str = "/arcane/api/v2/extension/chat"
+    merlin_origin: str = "chrome-extension://camppjleccjaphfdbohjdohecfnoikec"
     firebase_auth_host: str = "identitytoolkit.googleapis.com"
     firebase_auth_path: str = "/v1/accounts:signInWithPassword"
     firebase_refresh_host: str = "securetoken.googleapis.com"
@@ -26,7 +27,7 @@ class AdapterSettings(BaseModel):
     firebase_api_key: str = "AIzaSyAvCgtQ4XbmlQGIynDT-v_M8eLaXrKmtiM"
     merlin_email: str | None = None
     merlin_password: str | None = None
-    merlin_version: str = "iframe-merlin-7.5.19"
+    merlin_version: str = "merlin-extension-8.2.3"
     adapter_api_key: str = "sk-123"
     log_level_name: str = "INFO"
     log_to_file: bool = True
@@ -37,6 +38,7 @@ class AdapterSettings(BaseModel):
     token_refresh_buffer_seconds: int = 60
     auth_request_timeout_seconds: float = 20
     merlin_request_timeout_seconds: float = 45
+    tool_call_mode: Literal["native", "emulated"] = "native"
     tool_prompt_max_messages: int = 5
     tool_description_max_chars: int = 160
     tool_message_max_chars: int = 1200
@@ -99,7 +101,10 @@ SETTINGS = AdapterSettings.model_validate(
         "merlin_email": _env("MERLIN_EMAIL"),
         "merlin_password": _env("MERLIN_PASSWORD"),
         "merlin_version": _env("MERLIN_VERSION", AdapterSettings.model_fields["merlin_version"].default),
+        "merlin_path": _env("MERLIN_PATH", AdapterSettings.model_fields["merlin_path"].default),
+        "merlin_origin": _env("MERLIN_ORIGIN", AdapterSettings.model_fields["merlin_origin"].default),
         "adapter_api_key": _env("ADAPTER_API_KEY", AdapterSettings.model_fields["adapter_api_key"].default),
+        "tool_call_mode": _env("TOOL_CALL_MODE", AdapterSettings.model_fields["tool_call_mode"].default),
         "log_level_name": _env("LOG_LEVEL", AdapterSettings.model_fields["log_level_name"].default),
         "log_to_file": _env("LOG_TO_FILE", AdapterSettings.model_fields["log_to_file"].default),
         "auth_request_timeout_seconds": _env(
@@ -131,6 +136,7 @@ SETTINGS = AdapterSettings.model_validate(
 
 MERLIN_API_URL = SETTINGS.merlin_api_url
 MERLIN_PATH = SETTINGS.merlin_path
+MERLIN_ORIGIN = SETTINGS.merlin_origin
 FIREBASE_AUTH_HOST = SETTINGS.firebase_auth_host
 FIREBASE_AUTH_PATH = SETTINGS.firebase_auth_path
 FIREBASE_REFRESH_HOST = SETTINGS.firebase_refresh_host
@@ -140,6 +146,7 @@ MERLIN_EMAIL = SETTINGS.merlin_email
 MERLIN_PASSWORD = SETTINGS.merlin_password
 MERLIN_VERSION = SETTINGS.merlin_version
 ADAPTER_API_KEY = SETTINGS.adapter_api_key
+TOOL_CALL_MODE = SETTINGS.tool_call_mode
 LOG_LEVEL_NAME = SETTINGS.log_level_name
 LOG_TO_FILE = SETTINGS.log_to_file
 LOG_FILE_PATH = SETTINGS.log_file_path
