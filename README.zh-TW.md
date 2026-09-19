@@ -12,22 +12,27 @@
 
 - adapter API key 驗證
 - Merlin 登入與 token refresh
-- prompt 與 payload 轉換
+- 原生 extension 訊息與 payload 轉送
 - 上游即時串流與非串流回應
-- OpenAI `tool_calls` 相容層
+- 結構化 extension SSE 解析與 OpenAI 回應轉換
 
 ## 主要功能
 
 - 支援 OpenAI 相容的 `POST /v1/chat/completions`
 - 支援 OpenAI 相容的 `GET /v1/models`
-- 非工具聊天請求支援 Merlin SSE 即時串流
-- 工具呼叫請求會在 payload 驗證後輸出串流相容回應
+- 聊天請求支援 Merlin extension SSE 即時串流
+- 保留完整對話；原生模式保留 content parts，模擬模式將工具歷史轉成文字紀錄
 - 自動取得與刷新 Merlin bearer token
 - 透過 `Authorization: Bearer <ADAPTER_API_KEY>` 保護 adapter 入口
-- 將 Merlin 輸出轉為 OpenAI `tool_calls` 的工具呼叫相容層
-- 當必須產生工具呼叫但上游未提供時，回傳嚴格的 `422`
+- 明確切換 `native`／`emulated` 工具模式，不加入瀏覽器、MCP 或其他官方 extension 工具
+- 模擬呼叫必須通過完整 JSON 協定、工具名稱與參數 schema 驗證
 - 支援 request/response payload debug logging
 - 可用本機或 Docker 方式部署
+
+在 `.env` 設定 `TOOL_CALL_MODE=emulated` 並重啟，即可使用新版 extension
+傳輸搭配工具模擬。原生工具先前實測失敗；模擬模式已通過 Luna／Sonnet 的
+讀檔後回答完整回合。詳見[工具模式說明](docs/emulated-tool-calling.md)與
+[OpenCode 實測](docs/opencode-validation-2026-09-19.md)。
 
 ## 快速開始
 
@@ -139,22 +144,33 @@ docker compose down
 | `MERLIN_PASSWORD` | Yes | None | Merlin 登入密碼。 |
 | `ADAPTER_API_KEY` | No | `sk-123` | 進入 adapter 時要求的 `Authorization` API key。 |
 | `MERLIN_FIREBASE_API_KEY` | No | 內建預設值 | 用於 Merlin 登入的 Firebase Web API key。 |
-| `MERLIN_VERSION` | No | `iframe-merlin-7.5.19` | 轉發到上游時使用的 Merlin version header。 |
+| `MERLIN_VERSION` | No | `merlin-extension-8.2.3` | 上游 `x-merlin-version` header 的值，已核對官方 extension 原始程式。 |
+| `MERLIN_PATH` | No | `/arcane/api/v2/extension/chat` | 原生 Merlin extension chat endpoint。 |
+| `MERLIN_ORIGIN` | No | `chrome-extension://camppjleccjaphfdbohjdohecfnoikec` | 官方 8.2.3 extension request 使用的 Origin。 |
 | `LOG_LEVEL` | No | `INFO` | logger 層級。設為 `DEBUG` 可查看 payload trace。 |
 | `LOG_TO_FILE` | No | `true` | 開啟時會把 logs 寫入 `logs/adapter.log`。 |
 | `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Firebase 登入與 refresh request timeout。 |
 | `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Merlin upstream request timeout。 |
-| `TOOL_PROMPT_MAX_MESSAGES` | No | `5` | tool prompt 中保留的非 system 訊息數上限。 |
-| `TOOL_DESCRIPTION_MAX_CHARS` | No | `160` | tool description 裁切上限。 |
-| `TOOL_MESSAGE_MAX_CHARS` | No | `1200` | 一般訊息裁切上限。 |
-| `TOOL_SYSTEM_MAX_CHARS` | No | `12000` minimum | system message 裁切上限。 |
-| `TOOL_TOOL_RESULT_MAX_CHARS` | No | `6000` minimum | tool result 序列化後的裁切上限。 |
-| `TOOL_TOOL_ARGUMENTS_MAX_CHARS` | No | `4000` minimum | assistant tool arguments 裁切上限。 |
-| `TOOL_PARAMETER_DESCRIPTION_MAX_CHARS` | No | `300` minimum | tool parameter description 裁切上限。 |
+| `TOOL_CALL_MODE` | No | `native` | `native` 直接轉送工具；`emulated` 使用文字協定並驗證工具 JSON。修改後重啟。 |
+| `TOOL_PROMPT_MAX_MESSAGES` | No | `5` | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_DESCRIPTION_MAX_CHARS` | No | `160` | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_MESSAGE_MAX_CHARS` | No | `1200` | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_SYSTEM_MAX_CHARS` | No | `12000` minimum | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_TOOL_RESULT_MAX_CHARS` | No | `6000` minimum | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_TOOL_ARGUMENTS_MAX_CHARS` | No | `4000` minimum | 歷史比較設定；正常原生 transport 不使用。 |
+| `TOOL_PARAMETER_DESCRIPTION_MAX_CHARS` | No | `300` minimum | 歷史比較設定；正常原生 transport 不使用。 |
+
+`TOOL_*` prompt 壓縮設定仍保留給歷史比較與診斷輔助工具；正常的原生
+extension transport 會保留呼叫端的 messages 順序，不會攤平成單一 prompt。
+
+adapter 會設定 `metadata.isMCPEnabled=true`，因為 extension endpoint 即使
+`params.tools` 為空也要求這個 session flag；這不會加入 extension 工具。
+已核對的 extension header、測試結果與協定範圍，請參考
+[Extension compatibility](docs/extension-compatibility.md)。修改 `MERLIN_VERSION` 後需重啟 adapter。
 
 ## 除錯
 
-把 `LOG_LEVEL=DEBUG` 打開後，可以檢查 adapter 收到的 request、轉發給 Merlin 的 payload、structured payload parsing 過程，以及最後回給 client 的 OpenAI response。
+把 `LOG_LEVEL=DEBUG` 打開後，可以檢查 adapter 收到的 request、轉發給 Merlin 的 payload、原生 SSE event，以及最後回給 client 的 OpenAI response。
 
 如果只想輸出到 console，可以設定：
 
@@ -165,7 +181,6 @@ LOG_TO_FILE=false
 常用輔助腳本：
 
 - `uv run python scripts/build_log_report.py --log logs/adapter.log --out logs/report.md`
-- `uv run python scripts/compare_tool_transport_modes.py`
 
 ## 延伸文件
 

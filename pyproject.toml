@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.135.1",
     "httpx[http2]>=0.28.1",
     "json-repair>=0.58.5",
+    "jsonschema>=4.26.0",
     "loguru>=0.7.3",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",

@@ -2,6 +2,7 @@ fastapi
 uvicorn
 httpx[http2]
 json-repair
+jsonschema>=4.26.0
 loguru
 pydantic
 python-dotenv
