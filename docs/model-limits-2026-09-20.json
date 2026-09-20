@@ -1,0 +1,183 @@
+{
+  "source": "https://models.dev/api.json",
+  "retrieved_at": "2026-09-19T20:50:03.546748+00:00",
+  "source_sha256": "301032235f2816ba38a88b5bf0ba86ae3b3918f9052f1923175a8fc3ee483a7d",
+  "selection": "Exact model in first-party provider record; explicit spelling aliases only. Not Merlin limits.",
+  "models": [
+    {
+      "adapter_model": "claude-opus-5",
+      "provider": "anthropic",
+      "provider_model": "claude-opus-5",
+      "limit": {
+        "context": 1000000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "claude-sonnet-5",
+      "provider": "anthropic",
+      "provider_model": "claude-sonnet-5",
+      "limit": {
+        "context": 1000000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "provider_model": "deepseek-v4-flash",
+      "limit": {
+        "context": 1000000,
+        "output": 384000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "provider_model": "deepseek-v4-pro",
+      "limit": {
+        "context": 1000000,
+        "output": 384000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gemini-3.1-flash-lite",
+      "provider": "google",
+      "provider_model": "gemini-3.1-flash-lite",
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gemini-3.8-flash",
+      "provider": "google",
+      "provider_model": "gemini-3.8-flash",
+      "limit": {
+        "context": 1048576,
+        "output": 65536
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "glm-5.3",
+      "provider": "zai",
+      "provider_model": "glm-5.3",
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "glm-5.3-flash",
+      "provider": "zai",
+      "provider_model": "glm-5.3-flash",
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gpt-5.5",
+      "provider": "openai",
+      "provider_model": "gpt-5.5",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gpt-5.6-luna",
+      "provider": "openai",
+      "provider_model": "gpt-5.6-luna",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gpt-5.6-sol",
+      "provider": "openai",
+      "provider_model": "gpt-5.6-sol",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gpt-5.6-terra",
+      "provider": "openai",
+      "provider_model": "gpt-5.6-terra",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "gpt-6-astra",
+      "provider": "openai",
+      "provider_model": "gpt-6-astra",
+      "limit": {
+        "context": 1050000,
+        "input": 922000,
+        "output": 128000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "grok-4.6",
+      "provider": "xai",
+      "provider_model": "grok-4.6",
+      "limit": {
+        "context": 500000,
+        "output": 500000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "kimi-k3",
+      "provider": "moonshotai",
+      "provider_model": "kimi-k3",
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "minimax-m3",
+      "provider": "minimax",
+      "provider_model": "MiniMax-M3",
+      "limit": {
+        "context": 1048576,
+        "output": 512000
+      },
+      "merlin_limit_verified": false
+    },
+    {
+      "adapter_model": "qwen-3.8-max",
+      "provider": "alibaba",
+      "provider_model": "qwen3.8-max",
+      "limit": {
+        "context": 1000000,
+        "output": 131072
+      },
+      "merlin_limit_verified": false
+    }
+  ]
+}

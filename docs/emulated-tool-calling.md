@@ -46,15 +46,21 @@ TOOL_CALL_MODE=emulated
 ```
 
 - 僅解析明確啟用模擬模式且帶有工具的請求。
+- `auto`（含省略／null）容許無標記的非空普通最終文字，保留原文字與空白，
+  回 `finish_reason=stop`，不建立工具呼叫。仍須上游正常 DONE。
+- 純文字相容路徑不接受疑似協定標記、JSON／工具結構，或輸出 token 已達上限的
+  無標記回答；不會把損壞的呼叫改成文字成功。required／指定工具仍要求合法呼叫。
 - 容許單一完整區塊前後有解說文字；區塊外文字不會變成工具或回答。
 - 若有開始標記、JSON 已完整結束且後面只有空白，容許省略結尾文字標記。
   不補 JSON 括號、不補字串、不修復參數。JSON 字串內的標記視為普通內容。
-- 拒絕截斷 JSON、缺少開始標記、重複 JSON key、多個區塊、非有限數字、混合回答與呼叫、
+- 拒絕截斷 JSON、結構化回覆缺少開始標記、重複 JSON key、多個區塊、非有限數字、混合回答與呼叫、
   空呼叫清單、未宣告名稱及不符合 `tool_choice` 的回覆。
 - 使用 `jsonschema` 驗證 arguments，包含 required、型別、enum、巢狀結構、
   additionalProperties 等條件；支援本地 `#/$defs/...` 引用，禁止遠端 schema
   引用及下載。`format` 依 jsonschema 預設作為註記，不額外驗證。
-- 不使用舊版 JSON repair、不猜參數、不忽略錯誤呼叫，也不自動重試。
+- 不使用舊版 JSON repair、不猜參數、不忽略錯誤呼叫。非空、未耗盡預算且有完整 usage 的
+  格式／schema 錯誤可交回模型更正一次；更正仍須通過完整驗證，並共享原始輸出預算與時限。
+  未宣告工具、tool_choice 違反、多個區塊、上游錯誤、空白回應不進行更正。
 - 回應不合法時非串流回 502；串流送 error，沒有成功 finish 或 `[DONE]`。
 
 收到合法呼叫後，adapter 建立唯一 call ID。呼叫端執行工具，再送回 assistant
@@ -76,9 +82,23 @@ TOOL_CALL_MODE=emulated
 或最終文字 chunk、finish、可選 usage 與 `[DONE]`。因此工具回合的內容不是
 逐 token 即時顯示；截斷或後續出錯的 JSON 不會提前變成可執行呼叫。
 
-usage 保留上游數值，包含模擬協定文字產生的 token；不能當作已核對的帳單。
+usage 包含模擬協定文字產生的 token；更正成功時合計兩次請求。上游有提供推理計數時，
+另輸出 `completion_tokens_details.reasoning_tokens`；兩次更正計數必須都存在才合計此欄位。
+推理已包含於 completion_tokens，不能再加一次。這些計數不能當作已核對的帳單。
 格式驗證失敗會記錄 model、文字長度、是否有標記、max_tokens、output_tokens 與
-錯誤種類；這項 warning 不包含提示詞、檔案內容或工具結果。
+reasoning_tokens、錯誤種類；這項 warning 不包含提示詞、檔案內容或工具結果。
+空文字與沒有完整回覆且用滿上游輸出預算分別報錯，不再一概說缺少標記。
+budget 診斷依上游 usage 判斷，並不代表 adapter 能控制 Merlin 的思考強度。
+
+`reasoning_effort`、`thinking`、`reasoning` 的非 null 設定會在上游請求前回 422，
+說明 Merlin extension 傳輸尚未確認支援，避免默默忽略。null 視為未設定。
+使用者原始 messages 與 OpenCode 全域設定不變；adapter 內部新增短步驟與先寫可运行骨架的指示。
+不自動提高 max_tokens。GLM 大上限測試與 models.dev 目錄上限見 [模型上限](model-limits-2026-09-20.md)。
+
+`EMULATED_CORRECTION_ATTEMPTS=0` 可停用更正，預設 1。更正最多使用
+原請求剩餘輸出預算，沒有另一個固定上限；低於 256 不更正。Qwen 剩餘預算須至少 16385。
+拒絕回應超過 65536 字元時不重送內容。`COMPLETION_TIMEOUT_SECONDS=600` 限制整個請求，
+`COMPLETION_MAX_BYTES=16777216` 限制已解析 SSE 資料量；串流斷線會中止上游讀取。
 
 ## 驗證與重跑
 
@@ -90,3 +110,8 @@ usage 保留上游數值，包含模擬協定文字產生的 token；不能當�
 
 最後一個命令使用 `.env` 的模式；兩個真實 smoke 腳本都會使用帳號配額。
 完整實測結果見 [OpenCode 驗證紀錄](opencode-validation-2026-09-19.md)。
+
+Qwen3.8 Max 使用單一工具封包：`{"type":"tool_call","name":"read","arguments":{"filePath":"notes.txt"}}`，仍包在相同標記內並完整驗證 JSON、schema 與 tool_choice。既有批次封包仍可驗證，其他模型的協定不變。
+# Gemini 3.8 transport compatibility
+
+When no native tools are supplied, Gemini 3.8 Flash requires the upstream `params.tools` field to be omitted instead of an empty array. The adapter applies this exception while retaining text-emulated tool schemas and the model-specific token budget. Nonempty native tool lists are preserved.

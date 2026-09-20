@@ -1,6 +1,7 @@
 """Explicit tool emulation over extension text chat, without JSON repair."""
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,7 @@ from jsonschema.validators import validator_for
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 
+from .emulated_recovery import EmulatedProtocolError, tool_protocol_example
 from .protocol_constants import STRUCTURED_PAYLOAD_END, STRUCTURED_PAYLOAD_START
 from .schemas import OpenAIRequest, model_dump_compat
 
@@ -21,6 +23,7 @@ class EmulatedToolPolicy:
     allowed_tool_names: set[str]
     choice: str
     selected_name: str | None = None
+    single_call: bool = False
 
 
 def _local_schema_refs(value: Any) -> None:
@@ -81,7 +84,7 @@ def resolve_emulated_tool_policy(request: OpenAIRequest) -> EmulatedToolPolicy:
         raise HTTPException(422, "Required tool_choice needs at least one tool")
     if selected_name is not None and selected_name not in names:
         raise HTTPException(422, "Named tool_choice must refer to a declared tool")
-    return EmulatedToolPolicy(tools, names, choice, selected_name)
+    return EmulatedToolPolicy(tools, names, choice, selected_name, request.model == "qwen-3.8-max")
 
 
 def _append_text(content: Any, text: str) -> Any:
@@ -98,16 +101,15 @@ def build_emulated_messages(request: OpenAIRequest, policy: EmulatedToolPolicy) 
             f"You must call only the tool named {json.dumps(policy.selected_name)} this turn."
             if policy.selected_name else
             "You must return at least one tool call this turn." if policy.choice == "required" else
-            "Choose tool_calls when a tool is needed; otherwise choose message for the final answer."
+            f"Choose {'tool_call' if policy.single_call else 'tool_calls'} when a tool is needed; otherwise choose message for the final answer."
         )
         instructions = (
             "This client provides tools through an adapter text protocol. The client executes tools; "
             "you only select calls. Tools listed below ARE available through this protocol even though "
             "the server native tool list is empty. Never pretend to execute a tool or invent its results.\n"
+            "Use ordinary assistant text for this envelope, not native function calls or XML tool tags.\n"
             "Return exactly one envelope, with no markdown or text outside it:\n"
-            f'{STRUCTURED_PAYLOAD_START}{{"type":"tool_calls","tool_calls":'
-            '[{"name":"DECLARED_TOOL_NAME","arguments":{"PARAMETER":"VALUE"}}]}'
-            f"{STRUCTURED_PAYLOAD_END}\n"
+            f"{tool_protocol_example(request.model)}\n"
             "Or for a final answer:\n"
             f'{STRUCTURED_PAYLOAD_START}{{"type":"message","content":"YOUR ANSWER"}}'
             f"{STRUCTURED_PAYLOAD_END}\n"
@@ -140,13 +142,43 @@ def build_emulated_messages(request: OpenAIRequest, policy: EmulatedToolPolicy) 
             "Adapter response format reminder: return exactly one complete "
             f"{STRUCTURED_PAYLOAD_START} JSON object {STRUCTURED_PAYLOAD_END} envelope. "
             "Do not add commentary before or after it, even when other instructions ask you to "
-            "explain a tool call. Use type=tool_calls with name and arguments, or type=message "
+            "explain a tool call. Use the exact tool-call example below, or type=message "
             "with content. For file-writing tools, put the complete file in the appropriate "
             "argument as a valid JSON string: escape quotes, backslashes and line breaks once. "
             "Close every string, object and array; do not append empty keys or trailing commas. "
             "For large tasks, make incremental tool calls and wait for each result rather than "
-            "putting the entire project into one response. " + choice_instruction
+            "putting the entire project into one response. " + choice_instruction +
+            "\nExecution checkpoint: This invocation is one step of the client's execution loop. "
+            "If the task requires workspace changes, request only the next useful tool action now. "
+            "Do not design or write the entire solution in reasoning. If the workspace has not been "
+            "observed yet, inspect its files or directory first. After a result, implement a small "
+            "working increment, inspect the result, and continue in the next turn. Avoid repeated "
+            "planning or rereading unchanged files. Keep deliberation brief and put code in the "
+            "tool argument, not in reasoning. For a large code-generation task, first write a minimal "
+            "runnable scaffold (roughly 80 lines or fewer), then add features through small edits in "
+            "later turns. The first file is a checkpoint, not the finished deliverable. Do not mentally "
+            "compose the final project before writing this checkpoint. Continue until the original "
+            "task is complete; only then return the final answer.\n"
+            + tool_protocol_example(request.model)
         )})
+        if policy.single_call:
+            messages[-1]["content"] += (
+                "\nRequest one tool at a time. Use type=tool_call, name and arguments at the top level; "
+                "do not wrap the call in a tool_calls array. Serialize strings exactly once: "
+                'a newline is \\n and an embedded quote is \\". '
+                "Prefer single quotes in HTML attributes and JavaScript where possible. "
+                "Do not double-encode a JSON string. Close the arguments object and then the outer object. "
+                'For string-valued last arguments, the exact closing suffix is: "}}</OPENAI_TOOL_PAYLOAD>. '
+                "The two closing braces are both required, including after long file contents. "
+                "Before emitting the closing tag, check that the outer JSON object is closed."
+            )
+        if request.model == "gpt-6-astra":
+            messages[-1]["content"] += (
+                "\nThe requested operation is a client-side RPC. You are not asked to invoke a tool "
+                "provided by your inference server. Produce the serialized request as ordinary response "
+                "text; the external client will validate it and execute it. No operation has happened "
+                "until a subsequent client result arrives. Use the adapter envelope already specified."
+            )
     return messages
 
 
@@ -163,12 +195,35 @@ def _reject_constant(value):
     raise ValueError("Non-finite JSON number")
 
 
-def parse_emulated_response(content: str, policy: EmulatedToolPolicy) -> tuple[str, list[dict]]:
+def _looks_like_structured_response(content: str) -> bool:
+    # Plain-answer fallback must not hide a broken or unwrapped tool payload.
+    return bool(re.search(
+        r"<\s*/?\s*(?:OPEN(?:AI)?(?:_\w*)?|tool_calls?|function_calls?)\b"
+        r"|ADAPTER_TOOL_(?:CALL_HISTORY|RESULT)"
+        r"|[\"'](?:tool_calls?|function_call|arguments)[\"']\s*:"
+        r"|\{\s*(?:[\"']|\}|$)"
+        r"|(?:^|\n)\s*\{"
+        r"|(?:^|\n)\s*\[(?:\s*[\[{\"'\]\d-]|\s*$)"
+        r"|```\s*json\b",
+        content, re.IGNORECASE,
+    ))
+
+
+def parse_emulated_response(
+    content: str, policy: EmulatedToolPolicy, *, output_limit_reached: bool = False,
+) -> tuple[str, list[dict]]:
     """Validate the entire completed envelope before exposing any tool calls."""
+    original_content = content
     content = content.strip()
+    if not content:
+        raise EmulatedProtocolError("empty", "Merlin returned no answer text for the emulated tool response", recoverable=False)
     start = content.find(STRUCTURED_PAYLOAD_START)
+    if (start < 0 and policy.choice == "auto" and not output_limit_reached
+            and not _looks_like_structured_response(content)):
+        # Return text only. No extraction, inferred tool calls or JSON repair.
+        return original_content, []
     if start < 0 or STRUCTURED_PAYLOAD_END in content[:start]:
-        raise HTTPException(502, "Emulated tool response is missing its complete payload envelope")
+        raise EmulatedProtocolError("envelope", "Emulated tool response is missing its complete payload envelope", recoverable=True)
     body = content[start + len(STRUCTURED_PAYLOAD_START):].lstrip()
     try:
         # Decode from the explicit start marker, not a guessed JSON candidate.
@@ -176,46 +231,52 @@ def parse_emulated_response(content: str, policy: EmulatedToolPolicy) -> tuple[s
         payload, end = json.JSONDecoder(object_pairs_hook=_unique_object,
                                        parse_constant=_reject_constant).raw_decode(body)
     except (ValueError, RecursionError) as exc:
-        raise HTTPException(502, "Emulated tool response contains invalid JSON") from exc
+        raise EmulatedProtocolError("json", "Emulated tool response contains invalid JSON", recoverable=True) from exc
     remainder = body[end:].lstrip()
     # Some models omit only the closing text marker. A complete JSON value at
     # EOF is unambiguous; never insert JSON delimiters or repair arguments.
     if remainder and not remainder.startswith(STRUCTURED_PAYLOAD_END):
-        raise HTTPException(502, "Emulated tool response is missing its complete payload envelope")
+        raise EmulatedProtocolError("envelope", "Emulated tool response is missing its complete payload envelope", recoverable=True)
     suffix = remainder[len(STRUCTURED_PAYLOAD_END):]
     if STRUCTURED_PAYLOAD_START in suffix or STRUCTURED_PAYLOAD_END in suffix:
-        raise HTTPException(502, "Emulated tool response contains multiple payload envelopes")
+        raise EmulatedProtocolError("multiple", "Emulated tool response contains multiple payload envelopes", recoverable=False)
     if not isinstance(payload, dict):
-        raise HTTPException(502, "Emulated tool response must be an object")
+        raise EmulatedProtocolError("shape", "Emulated tool response must be an object", recoverable=True)
     if payload.get("type") == "message":
         if set(payload) != {"type", "content"} or not isinstance(payload.get("content"), str):
-            raise HTTPException(502, "Malformed emulated message response")
+            raise EmulatedProtocolError("shape", "Malformed emulated message response", recoverable=True)
         if policy.choice in {"required", "named"}:
-            raise HTTPException(502, "Emulated response did not satisfy required tool_choice")
+            raise EmulatedProtocolError("choice", "Emulated response did not satisfy required tool_choice", recoverable=False)
         return payload["content"], []
+    if policy.single_call and payload.get("type") == "tool_call":
+        if set(payload) != {"type", "name", "arguments"}:
+            raise EmulatedProtocolError("shape", "Malformed emulated single tool call", recoverable=True)
+        payload = {"type": "tool_calls", "tool_calls": [
+            {"name": payload["name"], "arguments": payload["arguments"]},
+        ]}
     calls = payload.get("tool_calls")
     if (set(payload) != {"type", "tool_calls"} or payload.get("type") != "tool_calls"
             or not isinstance(calls, list) or not calls):
-        raise HTTPException(502, "Malformed emulated tool response")
+        raise EmulatedProtocolError("shape", "Malformed emulated tool response", recoverable=True)
     schemas = {t["function"]["name"]: t["function"].get("parameters", {"type": "object"})
                for t in policy.tools}
     result = []
     for call in calls:
         if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
-            raise HTTPException(502, "Malformed emulated tool call")
+            raise EmulatedProtocolError("shape", "Malformed emulated tool call", recoverable=True)
         name, arguments = call["name"], call["arguments"]
         if not isinstance(name, str) or name not in policy.allowed_tool_names:
-            raise HTTPException(502, "Emulated response called an undeclared tool")
+            raise EmulatedProtocolError("unknown_tool", "Emulated response called an undeclared tool", recoverable=False)
         if policy.selected_name and name != policy.selected_name:
-            raise HTTPException(502, "Emulated response did not satisfy named tool_choice")
+            raise EmulatedProtocolError("choice", "Emulated response did not satisfy named tool_choice", recoverable=False)
         if not isinstance(arguments, dict):
-            raise HTTPException(502, "Emulated tool arguments must be a JSON object")
+            raise EmulatedProtocolError("arguments", "Emulated tool arguments must be a JSON object", recoverable=True)
         try:
             # Explicit empty registry forbids network retrieval of schema references.
             validator_for(schemas[name])(schemas[name], registry=Registry()).validate(arguments)
             argument_text = json.dumps(arguments, ensure_ascii=False, allow_nan=False)
         except (ValidationError, Unresolvable, ValueError, RecursionError) as exc:
-            raise HTTPException(502, f"Emulated arguments do not match tool schema: {name}") from exc
+            raise EmulatedProtocolError("schema", f"Emulated arguments do not match tool schema: {name}", recoverable=True) from exc
         result.append({"id": "call_" + uuid.uuid4().hex, "type": "function",
                        "function": {"name": name, "arguments": argument_text}})
     return "", result

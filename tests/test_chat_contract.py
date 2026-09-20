@@ -79,6 +79,27 @@ class ChatContractTests(unittest.TestCase):
                 json=body,
             )
 
+    def test_unverified_reasoning_controls_are_rejected_before_network(self):
+        body = {'model': 'glm-5.3', 'messages': [{'role': 'user', 'content': 'original prompt'}]}
+        for mode in ('native', 'emulated'):
+            with patch.object(merlin_openai_client, 'tool_call_mode', mode):
+                for stream in (False, True):
+                    for field, value in (('reasoning_effort', 'low'), ('thinking', {'type': 'disabled'}),
+                                         ('reasoning', {'effort': 'low'}), ('thinking', {})):
+                        response = self._post({**body, 'stream': stream, field: value})
+                        self.assertEqual(response.status_code, 422)
+                        self.assertIn('Unsupported reasoning controls', response.text)
+                        self.assertIn(field, response.text)
+        self.assertEqual(self.payloads, [])
+
+    def test_null_reasoning_controls_do_not_change_upstream_payload(self):
+        response = self._post({'model': 'glm-5.3', 'messages': [{'role': 'user', 'content': 'unchanged'}],
+                               'reasoning_effort': None, 'thinking': None, 'reasoning': None})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.payloads[0]['params'], {'tools': [], 'max_tokens': 131072})
+        self.assertEqual(self.payloads[0]['messages'],
+                         [{'role': 'user', 'content': [{'type': 'text', 'text': 'unchanged'}]}])
+
     def test_multiturn_native_payload_is_exact_and_has_no_extension_tools(self):
         system = "policy " + ("長提示詞 " * 400)
         messages = [{"role": "system", "content": system}]
@@ -120,7 +141,7 @@ class ChatContractTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["choices"][0]["message"]["content"], "ok")
         self.assertEqual(body["usage"], {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15})
-        self.assertEqual(self.payloads[0]["params"]["max_tokens"], 10000)
+        self.assertEqual(self.payloads[0]["params"]["max_tokens"], 128000)
 
     def test_stream_response_has_text_usage_finish_and_done_in_order(self):
         response = self._post(

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from .logging_config import log_debug_payload
 from .request_logging import clear_request_log_context, set_attempt_context, set_request_log_context
+from .response_usage import openai_usage
 from .schemas import (
     OpenAIChatCompletionChunk,
     OpenAIChatCompletionResponse,
@@ -121,16 +122,9 @@ def build_openai_response(request: OpenAIRequest, full_content: str, response_to
     return _dump_openai_response(response)
 
 
-def _openai_usage(raw_usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
+def _openai_usage(raw_usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Map native extension token counters to OpenAI response fields."""
-    tokens = raw_usage.get("tokens", raw_usage) if isinstance(raw_usage, dict) else {}
-    if not isinstance(tokens, dict):
-        tokens = {}
-    prompt = tokens.get("input", tokens.get("prompt", 0))
-    completion = tokens.get("output", tokens.get("completion", 0))
-    prompt = prompt if isinstance(prompt, int) and prompt >= 0 else 0
-    completion = completion if isinstance(completion, int) and completion >= 0 else 0
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+    return openai_usage(raw_usage)
 
 
 def build_native_openai_response(

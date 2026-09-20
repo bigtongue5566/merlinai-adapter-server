@@ -2,6 +2,7 @@ import datetime
 import http.client
 import json
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set
@@ -10,11 +11,15 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import token_manager
-from .config import MERLIN_API_URL, MERLIN_ORIGIN, MERLIN_PATH, MERLIN_REQUEST_TIMEOUT_SECONDS, MERLIN_VERSION, TOOL_CALL_MODE
+from .config import MERLIN_API_URL, MERLIN_ORIGIN, MERLIN_PATH, MERLIN_REQUEST_TIMEOUT_SECONDS, MERLIN_VERSION, TOOL_CALL_MODE, SETTINGS
 from .emulated_tools import (
     EmulatedToolPolicy, build_emulated_messages, parse_emulated_response, resolve_emulated_tool_policy,
 )
+from .emulated_recovery import RecoveryPolicy
+from .request_budget import ManagedStream, RequestBudget, active_deadline
+from .response_usage import sum_usage, token_counts
 from .logging_config import log_debug_payload, logger
+from .models_catalog import resolve_max_tokens
 from .merlin_sse import iter_merlin_sse
 from .native_protocol import normalize_native_tool_calls, resolve_native_tool_policy, validate_native_tool_choice
 from .openai_response_builder import build_native_openai_response, build_stream_chunk
@@ -54,8 +59,12 @@ class MerlinGateway:
             choice_mode = validate_native_tool_choice(tool_choice)
             params: Dict[str, Any] = {
                 "tools": [] if choice_mode == "none" else [model_dump_compat(tool) for tool in (tools or [])],
-                "max_tokens": max_tokens or 10000,
+                "max_tokens": resolve_max_tokens(model, max_tokens),
             }
+            # Merlin's Gemini 3.8 route rejects an empty tool array with
+            # INTERNAL_SERVER_ERROR. Omission works; real native tools stay intact.
+            if model == "gemini-3.8-flash" and not params["tools"]:
+                del params["tools"]
             # The extension currently emits usage for every stream. The
             # OpenAI-facing stream_options flag is handled locally so that an
             # unsupported provider parameter is never sent upstream.
@@ -87,7 +96,13 @@ class MerlinGateway:
         self,
         merlin_payload: Dict[str, Any],
     ) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse]:
-        conn = http.client.HTTPSConnection(MERLIN_API_URL, timeout=MERLIN_REQUEST_TIMEOUT_SECONDS)
+        deadline = active_deadline.get()
+        timeout = MERLIN_REQUEST_TIMEOUT_SECONDS
+        if deadline is not None:
+            timeout = min(timeout, deadline - time.monotonic())
+            if timeout <= 0:
+                raise HTTPException(504, "Merlin completion exceeded its overall time limit")
+        conn = http.client.HTTPSConnection(MERLIN_API_URL, timeout=timeout)
         try:
             return conn, self._open_response(conn, merlin_payload)
         except Exception:
@@ -100,6 +115,12 @@ class MerlinGateway:
         merlin_payload: Dict[str, Any],
     ) -> http.client.HTTPResponse:
         headers = self._get_headers()
+        deadline = active_deadline.get()
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HTTPException(504, "Merlin completion exceeded its overall time limit")
+            conn.timeout = min(MERLIN_REQUEST_TIMEOUT_SECONDS, remaining)
         log_debug_payload(
             "merlin_request_start",
             {
@@ -222,7 +243,7 @@ class ChatCompletionContext(BaseModel):
             tools=policy.tools,
             tool_choice=request.tool_choice,
             allowed_tool_names=policy.allowed_tool_names,
-            max_tokens=request.max_tokens,
+            max_tokens=resolve_max_tokens(request.model, request.max_tokens),
             stream_options=dict(request.stream_options or {}),
             emulation_policy=policy if tool_call_mode == "emulated" else None,
         )
@@ -254,6 +275,9 @@ class MerlinOpenAIClient:
             raise ValueError("tool_call_mode must be native or emulated")
         self._gateway = gateway
         self.tool_call_mode = tool_call_mode
+        self.recovery_policy = RecoveryPolicy(
+            enabled=bool(SETTINGS.emulated_correction_attempts),
+        )
 
     def execute_chat_completion(
         self,
@@ -292,14 +316,19 @@ class MerlinOpenAIClient:
         try:
             context = ChatCompletionContext.from_request(request, self.tool_call_mode)
             merlin_payload = self._build_merlin_payload(request, context)
-            conn, res = self._gateway.open_request(merlin_payload)
-            return self._iter_openai_stream_chunks(
+            budget = RequestBudget(SETTINGS.completion_timeout_seconds, SETTINGS.completion_max_bytes)
+            with budget.opening():
+                conn, res = self._gateway.open_request(merlin_payload)
+            iterator = self._iter_openai_stream_chunks(
                 request=request,
                 context=context,
                 conn=conn,
                 res=res,
                 request_id=request_id,
+                payload=merlin_payload,
+                budget=budget,
             )
+            return ManagedStream(iterator, conn, budget)
         except Exception:
             if conn is not None:
                 conn.close()
@@ -317,6 +346,8 @@ class MerlinOpenAIClient:
         context: ChatCompletionContext,
         conn: http.client.HTTPSConnection,
         res: http.client.HTTPResponse,
+        payload: Dict[str, Any],
+        budget: RequestBudget,
         request_id: str | None = None,
     ) -> Iterator[str]:
         if request_id:
@@ -327,6 +358,7 @@ class MerlinOpenAIClient:
         response_id = f"chatcmpl-{uuid.uuid4()}"
         created = int(datetime.datetime.now().timestamp())
         full_content = ""
+        content_parts: List[str] = []
         response_tool_calls: List[Dict[str, Any]] = []
         raw_events: List[Dict[str, Any]] = []
         raw_chunks: List[str] = []
@@ -344,12 +376,12 @@ class MerlinOpenAIClient:
             )
 
             upstream_names = set() if context.emulation_policy else context.allowed_tool_names
-            for stream_event in self._gateway.iter_event_stream(res, upstream_names):
-                raw_events.append(stream_event.raw_event)
-                raw_chunks.append(stream_event.raw_chunk)
+            for stream_event in self._bounded_events(conn, res, upstream_names, budget):
+                raw_events.append(self._event_summary(stream_event))
                 tool_start_index = len(response_tool_calls)
                 response_tool_calls.extend(stream_event.tool_calls)
-                full_content += stream_event.content_delta
+                if stream_event.content_delta:
+                    content_parts.append(stream_event.content_delta)
                 usage = stream_event.usage or usage
 
                 if context.emulation_policy and context.tools:
@@ -386,8 +418,17 @@ class MerlinOpenAIClient:
                             finish_reason=None,
                         )
 
+            full_content = "".join(content_parts)
+            content_parts.clear()
             if context.emulation_policy and context.tools:
-                full_content, response_tool_calls = self._parse_emulated_response(full_content, context, usage)
+                conn.close()
+                completed = self._resolve_emulated(
+                    MerlinResponseEnvelope(content=full_content, tool_calls=[], raw_events=raw_events,
+                                           raw_chunks=[], usage=usage),
+                    context, payload, budget,
+                )
+                full_content, response_tool_calls, usage = completed.content, completed.tool_calls, completed.usage
+                raw_events = completed.raw_events
                 if response_tool_calls:
                     yield build_stream_chunk(
                         response_id=response_id, created=created, model=request.model,
@@ -470,63 +511,119 @@ class MerlinOpenAIClient:
             else:
                 set_attempt_context(None)
 
+    @staticmethod
+    def _event_summary(event: MerlinStreamEvent) -> Dict[str, Any]:
+        # Do not retain every raw event plus a second copy of its SSE JSON.
+        # In particular, reasoning text does not belong in ordinary logs.
+        return {"content_chars": len(event.content_delta), "reasoning_chars": len(event.reasoning_delta),
+                "tool_call_count": len(event.tool_calls)}
+
+    def _bounded_events(
+        self, conn: http.client.HTTPSConnection, res: http.client.HTTPResponse,
+        names: Set[str], budget: RequestBudget,
+    ) -> Iterator[MerlinStreamEvent]:
+        with budget.reading(conn, res):
+            for event in self._gateway.iter_event_stream(res, names):
+                budget.observe(event.raw_chunk)
+                yield event
+
+    def _read_response(
+        self, payload: Dict[str, Any], context: ChatCompletionContext, budget: RequestBudget,
+    ) -> MerlinResponseEnvelope:
+        conn = None
+        try:
+            with budget.opening():
+                conn, res = self._gateway.open_request(payload)
+            parts, calls, summaries = [], [], []
+            usage = None
+            names = set() if context.emulation_policy else context.allowed_tool_names
+            for event in self._bounded_events(conn, res, names, budget):
+                parts.append(event.content_delta)
+                calls.extend(event.tool_calls)
+                summaries.append(self._event_summary(event))
+                if event.usage is not None:
+                    usage = event.usage
+            return MerlinResponseEnvelope(content="".join(parts), tool_calls=calls,
+                                          raw_events=summaries, raw_chunks=[], usage=usage)
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _resolve_emulated(
+        self, response: MerlinResponseEnvelope, context: ChatCompletionContext,
+        payload: Dict[str, Any], budget: RequestBudget,
+    ) -> MerlinResponseEnvelope:
+        """Shared atomic validation/recovery for both HTTP response modes."""
+        attempts = [response.usage]
+        summaries = list(response.raw_events)
+        for attempt in range(2):
+            try:
+                content, calls = self._parse_emulated_response(response.content, context, response.usage)
+                return MerlinResponseEnvelope(content=content, tool_calls=calls, raw_events=summaries,
+                                              raw_chunks=[], usage=sum_usage(attempts))
+            except HTTPException as exc:
+                correction = (self.recovery_policy.correction_payload(payload, response.content, response.usage, exc)
+                              if attempt == 0 else None)
+                if correction is None:
+                    raise
+                budget.remaining()
+                logger.info("emulated_protocol_correction model={} code={} max_tokens={}",
+                            context.model, exc.code, correction["params"]["max_tokens"])
+                set_attempt_context("protocol_correction")
+                response = self._read_response(correction, context, budget)
+                # Validate against this attempt's ceiling, not the initial one.
+                context = context.model_copy(update={"max_tokens": correction["params"]["max_tokens"]})
+                attempts.append(response.usage)
+                summaries.extend(response.raw_events)
+        raise AssertionError("unreachable")
+
     def _send_request(
-        self,
-        request: OpenAIRequest,
-        context: ChatCompletionContext,
-        *,
-        attempt: str,
+        self, request: OpenAIRequest, context: ChatCompletionContext, *, attempt: str,
     ) -> MerlinResponseEnvelope:
         set_attempt_context(attempt)
-        merlin_payload = self._build_merlin_payload(request, context)
-        content, tool_calls, raw_events, raw_chunks, usage = self._gateway.send_request(
-            merlin_payload, set() if context.emulation_policy else context.allowed_tool_names
-        )
+        payload = self._build_merlin_payload(request, context)
+        budget = RequestBudget(SETTINGS.completion_timeout_seconds, SETTINGS.completion_max_bytes)
+        response = self._read_response(payload, context, budget)
         if context.emulation_policy and context.tools:
-            content, tool_calls = self._parse_emulated_response(content, context, usage)
-        log_debug_payload(
-            "merlin_raw_response",
-            {
-                "transport": "extension",
-                "event_count": len(raw_events),
-                "raw_event_chunks": raw_chunks,
-                "raw_events": raw_events,
-                "assembled_content": content,
-                "tool_calls": tool_calls,
-            },
-        )
-        log_debug_payload(
-            "merlin_attempt_summary",
-            {
-                "transport": "extension",
-                "event_count": len(raw_events),
-                "assembled_content": content,
-                "tool_call_count": len(tool_calls),
-            },
-        )
-        return MerlinResponseEnvelope(
-            content=content,
-            tool_calls=tool_calls,
-            raw_events=raw_events,
-            raw_chunks=raw_chunks,
-            usage=usage,
-        )
+            response = self._resolve_emulated(response, context, payload, budget)
+        log_debug_payload("merlin_attempt_summary", {
+            "transport": "extension", "event_count": len(response.raw_events),
+            "content_chars": len(response.content), "tool_call_count": len(response.tool_calls),
+            "usage": response.usage,
+        })
+        return response
 
     def _parse_emulated_response(
         self, content: str, context: ChatCompletionContext, usage: Optional[Dict[str, Any]],
     ) -> tuple[str, List[Dict[str, Any]]]:
+        tokens = token_counts(usage)
+        output_tokens = tokens.get("output")
+        reasoning_tokens = tokens.get("reasoning")
+        max_tokens = resolve_max_tokens(context.model, context.max_tokens)
+        limit_reached = type(output_tokens) is int and output_tokens >= max_tokens
         try:
-            return parse_emulated_response(content, context.emulation_policy)
+            return parse_emulated_response(content, context.emulation_policy,
+                                           output_limit_reached=limit_reached)
         except HTTPException as exc:
-            tokens = usage.get("tokens", {}) if isinstance(usage, dict) else {}
-            output_tokens = tokens.get("output") if isinstance(tokens, dict) else None
+            detail = exc.detail
+            incomplete = not content.strip() or exc.detail in {
+                "Emulated tool response is missing its complete payload envelope",
+                "Emulated tool response contains invalid JSON",
+            }
+            if limit_reached and incomplete:
+                detail = ("Merlin output token budget exhausted before a complete emulated response "
+                          f"(max_tokens={max_tokens}, output_tokens={output_tokens}, "
+                          f"reasoning_tokens={reasoning_tokens if type(reasoning_tokens) is int else 'unknown'}); "
+                          "no tool calls were released")
             # Keep failures diagnosable without logging prompts, code or tool results.
             logger.warning(
                 "emulated_response_invalid model={} chars={} has_start={} has_end={} "
-                "max_tokens={} output_tokens={} error={}",
+                "max_tokens={} output_tokens={} reasoning_tokens={} error={}",
                 context.model, len(content), STRUCTURED_PAYLOAD_START in content,
-                STRUCTURED_PAYLOAD_END in content, context.max_tokens, output_tokens, exc.detail,
+                STRUCTURED_PAYLOAD_END in content, max_tokens, output_tokens, reasoning_tokens, detail,
             )
+            if limit_reached and incomplete:
+                raise HTTPException(502, detail) from exc
             raise
 
     def _build_merlin_payload(

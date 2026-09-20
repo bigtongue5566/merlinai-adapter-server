@@ -31,12 +31,12 @@ def event(name, data):
     return f"event: {name}\ndata: {json.dumps(data)}\n\n".encode()
 
 
-def upstream(text, *, done=True):
+def upstream(text, *, done=True, usage=None):
     # Split in the middle of protocol JSON to exercise buffering across frames.
     midpoint = len(text) // 2
     result = event("message", {"data": {"text": text[:midpoint]}})
     result += event("message", {"data": {"text": text[midpoint:]}})
-    result += event("usage", {"tokens": {"input": 23, "output": 12}})
+    result += event("usage", usage if usage is not None else {"tokens": {"input": 23, "output": 12}})
     if done:
         result += event("message", {"data": {"eventType": "DONE"}})
     return result
@@ -138,7 +138,7 @@ class EmulatedToolsTests(unittest.TestCase):
             self.assertNotIn('"usage":', response.text)
 
     def test_invalid_responses_fail_without_partial_calls_or_repairs(self):
-        invalid = ["plain answer", json.dumps(call()), envelope(call("unknown")),
+        invalid = [json.dumps(call()), envelope(call("unknown")),
                    envelope(call(arguments={})), envelope(call(arguments={"filePath": 7})),
                    envelope(call(arguments={"filePath": "x", "extra": True})),
                    envelope(call(arguments="{}")), envelope({"type": "tool_calls", "tool_calls": []}),
@@ -219,12 +219,90 @@ class EmulatedToolsTests(unittest.TestCase):
 
     def test_invalid_response_diagnostics_do_not_log_tool_content(self):
         with patch("merlinai_adapter_server.merlin_client.logger") as logger:
-            response = self.post(upstream("private file contents"), model="glm-5.3-flash", max_tokens=32000)
+            response = self.post(upstream('{"private file contents":'), model="glm-5.3-flash", max_tokens=32000)
         self.assertEqual(response.status_code, 502)
-        args = logger.warning.call_args.args
+        args = logger.warning.call_args_list[0].args
         self.assertIn("glm-5.3-flash", args)
         self.assertIn(32000, args)
         self.assertNotIn("private file contents", repr(args))
+
+    def test_auto_plain_final_answer_after_tool_round_trip_preserves_text(self):
+        message = self.post(upstream(envelope(call()))).json()["choices"][0]["message"]
+        history = [{"role": "user", "content": "Read fixture"}, message,
+                   {"role": "tool", "tool_call_id": message["tool_calls"][0]["id"],
+                    "content": "No files found"}]
+        final = '  當前資料夾是空的，glob pattern "*" 沒有找到任何檔案。\n\n[說明](https://example.com)\n'
+        for choice in (None, "auto"):
+            for stream in (False, True):
+                response = self.post(upstream(final), messages=history, stream=stream,
+                                     tool_choice=choice, stream_options={"include_usage": True})
+                if stream:
+                    chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                              if line.startswith("data: ") and line != "data: [DONE]"]
+                    choices = [c for chunk in chunks for c in chunk.get("choices", [])]
+                    actual = ''.join(c['delta'].get('content', '') for c in choices)
+                    self.assertEqual(choices[-1]['finish_reason'], 'stop')
+                    self.assertEqual(chunks[-1]['usage']['completion_tokens'], 12)
+                    self.assertTrue(response.text.endswith('data: [DONE]\n\n'))
+                    self.assertNotIn('"tool_calls":', response.text)
+                else:
+                    body = response.json()
+                    actual = body['choices'][0]['message']['content']
+                    self.assertEqual(body['choices'][0]['finish_reason'], 'stop')
+                    self.assertNotIn('tool_calls', body['choices'][0]['message'])
+                self.assertEqual(actual, final)
+
+    def test_plain_answer_does_not_bypass_required_named_or_upstream_failure(self):
+        for stream in (False, True):
+            for choice in ('required', {'type': 'function', 'function': {'name': 'read'}}):
+                self.assert_failure(self.post(upstream('Directory is empty.'), stream=stream,
+                                              tool_choice=choice), stream)
+            for source in (upstream('Directory is empty.', done=False),
+                           upstream('Directory is empty.', done=False) + event('error', {'error': 'failed'})):
+                self.assert_failure(self.post(source, stream=stream), stream)
+
+    def test_plain_fallback_rejects_structured_or_partial_protocol(self):
+        invalid = ['', '   ', '<OPENAI_TOOL', 'Answer </OPENAI_TOOL_PAYLOAD>',
+                   '<openai_tool_payload>{}', '<tool_call>{}', '{broken', '[{"name":"read"',
+                   'Here is the result:\n```json\n{"type":"tool_calls"',
+                   'Calling: {"name":"read","arguments":',
+                   'ADAPTER_TOOL_CALL_HISTORY []', '"tool_calls": []']
+        for stream in (False, True):
+            for text in invalid:
+                with self.subTest(stream=stream, text=text):
+                    self.assert_failure(self.post(upstream(text), stream=stream), stream)
+
+    def test_exhausted_budget_diagnoses_empty_truncated_and_unmarked_responses(self):
+        usage = {'tokens': {'input': 12115, 'output': 32000, 'reasoning': 31997}}
+        for stream in (False, True):
+            for text in ('', '  ', 'Incomplete answer', STRUCTURED_PAYLOAD_START + '{"type":'):
+                response = self.post(upstream(text, usage=usage), model='glm-5.3',
+                                     max_tokens=32000, stream=stream)
+                self.assert_failure(response, stream)
+                self.assertIn('output token budget exhausted', response.text)
+                self.assertIn('reasoning_tokens=31997', response.text)
+            # Token usage alone is not proof of truncation of a complete envelope.
+            response = self.post(upstream(envelope(call()), usage=usage), max_tokens=32000, stream=stream)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('"tool_calls"', response.text)
+            self.assertNotIn('budget exhausted', response.text)
+            response = self.post(upstream(envelope(call('unknown')), usage=usage),
+                                 max_tokens=32000, stream=stream)
+            self.assert_failure(response, stream)
+            self.assertIn('undeclared tool', response.text)
+            self.assertNotIn('budget exhausted', response.text)
+
+    def test_budget_diagnostics_use_default_limit_and_tolerate_missing_usage(self):
+        for stream in (False, True):
+            response = self.post(upstream('', usage={'tokens': {'output': 128000}}), stream=stream)
+            self.assertIn('max_tokens=128000', response.text)
+            self.assertIn('reasoning_tokens=unknown', response.text)
+            for usage in ({}, {'tokens': None}, {'tokens': {'output': '32000'}},
+                          {'tokens': {'output': 12, 'reasoning': 10}}):
+                response = self.post(upstream('', usage=usage), stream=stream)
+                self.assert_failure(response, stream)
+                self.assertIn('no answer text', response.text)
+                self.assertNotIn('budget exhausted', response.text)
 
     def test_invalid_requests_rejected_before_network(self):
         for fields in ({"tool_choice": "bogus"}, {"tools": [], "tool_choice": "required"},

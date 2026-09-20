@@ -31,7 +31,7 @@ Authorization: Bearer <ADAPTER_API_KEY>
 | `stream` | `boolean` | No | Defaults to `false`. |
 | `tools` | `array` | No | Caller function schemas: forwarded in native mode, encoded in a prompt in emulated mode. No official extension tools are added. |
 | `tool_choice` | `string` or `object` | No | `auto`/omitted/`null` permits tools; `none` disables them. `required` and a named function are supported in emulated mode only; invalid requests return `422`. |
-| `max_tokens` | `integer` | No | Positive output limit; sent as `params.max_tokens`, defaulting upstream to `10000`. |
+| `max_tokens` | `integer` | No | Positive output limit sent as `params.max_tokens`. Omitted/null uses the configured model ceiling; explicit smaller values are preserved, values above that ceiling return `422` before network I/O. Unknown models retain a `10000` default. See [model limits](model-limits-2026-09-20.md). |
 | `stream_options` | `object` | No | Supports `include_usage`; usage is emitted in the final stream chunk when enabled. |
 
 ### Message shape
@@ -84,6 +84,32 @@ envelope, validates complete calls against the declared parameter schemas,
 and encodes subsequent tool history as text. Required/named choices are
 enforced locally. Invalid responses return `502` or an SSE error.
 See [emulated tool calling](emulated-tool-calling.md) for the full contract.
+
+With emulated `auto` tool selection, a nonempty plain final answer without protocol
+or JSON/tool structure is accepted as text after upstream DONE. Required/named tool
+selection still requires validated calls. Malformed payloads are never repaired or
+silently converted to successful answers. Unmarked answers at the reported output
+token limit are rejected as potentially incomplete. Empty output and exhausted output
+budgets have distinct errors, with token counts when supplied by the upstream.
+
+Non-null `reasoning_effort`, `thinking`, and `reasoning` request settings return `422`
+before contacting Merlin because support through its extension endpoint is unverified.
+They are not silently ignored. Null is equivalent to omission. No reasoning setting
+or increased token budget is applied automatically.
+
+Emulated tool mode permits one protocol correction by default, only after completed,
+nonempty, non-budget-exhausted output with a recoverable format/schema error.
+The correction shares the original output allowance and overall deadline; it never
+executes tools. Disable it with `EMULATED_CORRECTION_ATTEMPTS=0`. Unknown tools,
+tool-choice violations, ambiguous multiple envelopes, missing usage, transport errors
+and empty reasoning-only output are not retried. Failed correction remains an error.
+See [reliability changes](reliability-2026-09-20.md).
+
+When upstream reasoning counts are available, usage also includes
+`completion_tokens_details.reasoning_tokens`. Successful correction reports summed
+input/output usage across both attempts; reasoning details are included only when
+both attempts supplied them. Reasoning is already included in completion tokens,
+so it must not be added to the total again. No raw reasoning text is exposed.
 
 In `native` mode, the adapter does not register Merlin's browser or MCP tools. Omitted or
 `null` `tool_choice`, and `tool_choice: "auto"`, send caller-supplied schemas.
@@ -233,9 +259,18 @@ Common status codes returned by the adapter:
 
 Upstream Merlin errors may also be passed through using the upstream HTTP status code and body.
 
+`GET /v1/models` includes an adapter extension `limit` on each model: `context`,
+`output`, and `input` only when independently listed by the source. These are
+configured capacities, not verified Merlin limits or exact local token counts.
+Context is not sent as an upstream request parameter. The adapter does not truncate
+history or reject requests based on character-count estimates; actual context
+admission remains upstream. Clients may ignore this nonstandard metadata.
+
 ## Related Docs
 
 - [Project README](../README.md)
 - [Architecture flow](architecture-flow.md)
 - [Development notes](development-notes.md)
 - [Troubleshooting](troubleshooting.md)
+
+Qwen3.8 Max transport requires `max_tokens >= 16385` (repeated live boundary tests); smaller explicit budgets return 422 without being silently increased. Correction uses the remaining original/model budget with no separate 8192/32768 ceiling, and is skipped if the remainder is incompatible with the model.
