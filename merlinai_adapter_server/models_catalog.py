@@ -35,7 +35,7 @@ MODEL_MIN_OUTPUT_TOKENS = {"qwen-3.8-max": 16_385}
 
 
 def resolve_max_tokens(model: str, requested: int | None) -> int:
-    """Apply the model default; preserve explicit smaller budgets, reject excess."""
+    """Use model defaults for omitted or transport-incompatible client budgets."""
     from fastapi import HTTPException
 
     ceiling = MODEL_MAX_OUTPUT_TOKENS.get(model)
@@ -45,8 +45,9 @@ def resolve_max_tokens(model: str, requested: int | None) -> int:
         raise HTTPException(422, "max_tokens must be a positive integer")
     minimum = MODEL_MIN_OUTPUT_TOKENS.get(model, 1)
     if requested < minimum:
-        raise HTTPException(422, f"Merlin transport requires max_tokens >= {minimum} for {model}; "
-                            "omit max_tokens to use the model default")
+        # Some clients supply a small generic budget even for reasoning models.
+        # Use this model's configured default instead of rejecting those requests.
+        return ceiling if ceiling is not None else minimum
     if ceiling is not None and requested > ceiling:
         raise HTTPException(422, f"max_tokens exceeds the configured output limit for {model}: {ceiling}")
     return requested

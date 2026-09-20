@@ -236,12 +236,13 @@ class CompletionRecoveryTests(unittest.TestCase):
             self.failure(response, stream)
             self.assertEqual(len(self.payloads), 1)
 
-    def test_qwen_low_explicit_limit_returns_actionable_error_before_network(self):
+    def test_qwen_low_client_limit_uses_model_default(self):
         for stream in (False, True):
-            response = self.post([], model="qwen-3.8-max", max_tokens=16384, stream=stream)
-            self.assertEqual(response.status_code, 422)
-            self.assertIn("16385", response.text)
-            self.assertEqual(self.payloads, [])
+            for requested in (1, 1000, 8192, 16384):
+                response = self.post([upstream(envelope(call()))], model="qwen-3.8-max",
+                                     max_tokens=requested, stream=stream, stream_options={"include_usage": True})
+                self.success(response, stream)
+                self.assertEqual(self.payloads[0]["params"]["max_tokens"], 131072)
 
     def test_qwen_single_call_has_full_validation_and_exact_string_arguments(self):
         argument = "C:\\test\\original\n<OPENAI_TOOL_PAYLOAD>\"quoted\""

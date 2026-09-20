@@ -31,7 +31,7 @@ Authorization: Bearer <ADAPTER_API_KEY>
 | `stream` | `boolean` | No | Defaults to `false`. |
 | `tools` | `array` | No | Caller function schemas: forwarded in native mode, encoded in a prompt in emulated mode. No official extension tools are added. |
 | `tool_choice` | `string` or `object` | No | `auto`/omitted/`null` permits tools; `none` disables them. `required` and a named function are supported in emulated mode only; invalid requests return `422`. |
-| `max_tokens` | `integer` | No | Positive output limit sent as `params.max_tokens`. Omitted/null uses the configured model ceiling; explicit smaller values are preserved, values above that ceiling return `422` before network I/O. Unknown models retain a `10000` default. See [model limits](model-limits-2026-09-20.md). |
+| `max_tokens` | `integer` | No | Positive output limit sent as `params.max_tokens`. Omitted/null uses the configured model ceiling; compatible explicit smaller values are preserved (Qwen below 16385 uses its model default), values above that ceiling return `422` before network I/O. Unknown models retain a `10000` default. See [model limits](model-limits-2026-09-20.md). |
 | `stream_options` | `object` | No | Supports `include_usage`; usage is emitted in the final stream chunk when enabled. |
 
 ### Message shape
@@ -273,4 +273,4 @@ admission remains upstream. Clients may ignore this nonstandard metadata.
 - [Development notes](development-notes.md)
 - [Troubleshooting](troubleshooting.md)
 
-Qwen3.8 Max transport requires `max_tokens >= 16385` (repeated live boundary tests); smaller explicit budgets return 422 without being silently increased. Correction uses the remaining original/model budget with no separate 8192/32768 ceiling, and is skipped if the remainder is incompatible with the model.
+Qwen3.8 Max transport requires `max_tokens >= 16385` (repeated live boundary tests). As a compatibility exception, positive caller budgets below this floor use the model default of 131072 instead of returning 422. This increases the effective output allowance; clients requiring a hard smaller ceiling cannot enforce it through this route. Compatible explicit budgets are preserved. Correction uses the remaining effective budget with no separate 8192/32768 ceiling and is skipped if the remainder is incompatible with the model.
