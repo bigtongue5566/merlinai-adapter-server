@@ -1,6 +1,7 @@
 import uuid
 from typing import Optional
 
+import anyio
 from fastapi import FastAPI, Header
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -15,6 +16,19 @@ from .security import verify_adapter_api_key
 configure_logger()
 
 app = FastAPI(title="merlinai-adapter-server")
+
+
+async def _stream_with_cleanup(iterator):
+    """Propagate ASGI disconnects to the blocking upstream socket."""
+    sentinel = object()
+    try:
+        while True:
+            chunk = await anyio.to_thread.run_sync(lambda: next(iterator, sentinel), abandon_on_cancel=True)
+            if chunk is sentinel:
+                break
+            yield chunk
+    finally:
+        iterator.close()
 
 
 @app.post("/v1/chat/completions")
@@ -42,7 +56,7 @@ async def chat_completions(request: OpenAIRequest, authorization: Optional[str] 
                 request_id,
             )
             return StreamingResponse(
-                stream_iterator,
+                _stream_with_cleanup(stream_iterator),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )

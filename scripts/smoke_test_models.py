@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from merlinai_adapter_server import app
 from merlinai_adapter_server.config import ADAPTER_API_KEY, MERLIN_VERSION, TOOL_CALL_MODE
-from merlinai_adapter_server.models_catalog import SUPPORTED_MODELS
+from merlinai_adapter_server.models_catalog import SUPPORTED_MODELS, resolve_max_tokens
 from merlinai_adapter_server.schemas import OpenAIChatCompletionChunk, OpenAIChatCompletionResponse
 
 HEADERS = {"Authorization": f"Bearer {ADAPTER_API_KEY}"}
@@ -67,8 +67,9 @@ def run_case(case: tuple[str, str]) -> dict:
             if tool_mode else f"Reply with exactly {MARKER} and nothing else."
         )}],
         "stream": stream,
-        "max_tokens": 1000,
+        "max_tokens": resolve_max_tokens(model, None),
     }
+    result["max_tokens"] = request["max_tokens"]
     if stream:
         request["stream_options"] = {"include_usage": True}
     if tool_mode:

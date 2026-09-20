@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Type, Union
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 JsonDict = Dict[str, Any]
 
@@ -85,6 +85,20 @@ class OpenAIRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=None, gt=0)
     stream_options: Optional[Dict[str, bool]] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unverified_reasoning_controls(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            unsupported = [key for key in ("reasoning_effort", "thinking", "reasoning")
+                           if value.get(key) is not None]
+            if unsupported:
+                raise ValueError(
+                    "Unsupported reasoning controls for the Merlin extension transport: "
+                    + ", ".join(unsupported)
+                    + ". Upstream support is unverified; these settings cannot be applied."
+                )
+        return value
+
     @field_validator("stream_options")
     @classmethod
     def _validate_stream_options(cls, value: Optional[Dict[str, bool]]) -> Optional[Dict[str, bool]]:
@@ -140,10 +154,15 @@ class OpenAIChoice(BaseModel):
     finish_reason: str
 
 
+class CompletionTokenDetails(BaseModel):
+    reasoning_tokens: int
+
+
 class OpenAIUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    completion_tokens_details: Optional[CompletionTokenDetails] = None
 
 
 class OpenAIChatCompletionResponse(BaseModel):
@@ -176,11 +195,20 @@ class OpenAIChatCompletionChunk(BaseModel):
     usage: Optional[OpenAIUsage] = None
 
 
+class ModelLimits(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    context: int = Field(gt=0)
+    output: int = Field(gt=0)
+    input: Optional[int] = Field(default=None, gt=0)
+
+
 class OpenAIModel(BaseModel):
     id: str
     object: Literal["model"] = "model"
     created: int
     owned_by: str = "merlin"
+    limit: Optional[ModelLimits] = None
 
 
 class OpenAIModelsResponse(BaseModel):

@@ -17,6 +17,18 @@ TOOL = {
 
 
 class NativeProtocolTests(unittest.TestCase):
+    def test_gemini_empty_tools_omitted_without_losing_real_tools(self):
+        gateway = MerlinGateway()
+        for supplied, choice, expected in (([], None, None), ([TOOL], "none", None), ([TOOL], None, [TOOL])):
+            with self.subTest(choice=choice, supplied=supplied):
+                payload = gateway.build_payload(model="gemini-3.8-flash",
+                    messages=[{"role": "user", "content": "hi"}], tools=supplied, tool_choice=choice)
+                self.assertEqual(payload["params"].get("tools"), expected)
+                if expected is None:
+                    self.assertNotIn("tools", payload["params"])
+                self.assertEqual(payload["params"]["max_tokens"], 65536)
+                self.assertEqual(payload["metadata"], {"isMCPEnabled": True})
+
     def request(self, **kwargs):
         return OpenAIRequest(model="gpt-5.6-luna", messages=[{"role": "user", "content": "hi"}], **kwargs)
 
@@ -98,6 +110,14 @@ class NativeProtocolTests(unittest.TestCase):
         events = list(MerlinGateway().iter_event_stream(io.BytesIO(source), set()))
         self.assertIn('"function"', events[0].content_delta)
         self.assertEqual(events[0].tool_calls, [])
+
+    def test_unknown_name_does_not_echo_generated_code_in_errors(self):
+        call = {"id": "call_1", "type": "function",
+                "function": {"name": "private code " * 10000, "arguments": "{}"}}
+        with self.assertRaises(HTTPException) as raised:
+            normalize_native_tool_calls([call], {"echo"})
+        self.assertLess(len(raised.exception.detail), 100)
+        self.assertNotIn("private code", raised.exception.detail)
 
     def test_embedded_malformed_tool_field_is_not_ignored(self):
         source = b'event: message\ndata: {"data":{"tool_calls":{}}}\n\nevent: message\ndata: {"data":{"eventType":"DONE"}}\n\n'

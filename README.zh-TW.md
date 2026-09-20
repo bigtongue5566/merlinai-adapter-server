@@ -152,6 +152,9 @@ docker compose down
 | `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Firebase 登入與 refresh request timeout。 |
 | `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Merlin upstream request timeout。 |
 | `TOOL_CALL_MODE` | No | `native` | `native` 直接轉送工具；`emulated` 使用文字協定並驗證工具 JSON。修改後重啟。 |
+| `COMPLETION_TIMEOUT_SECONDS` | No | `600` | 整體請求時限，包含更正；不同於 socket 閒置逾時。 |
+| `COMPLETION_MAX_BYTES` | No | `16777216` | 每次完成請求的已解析 SSE 資料量上限，包含更正。 |
+| `EMULATED_CORRECTION_ATTEMPTS` | No | `1` | 最多一次協定更正；0 停用，不重試傳輸錯誤。 |
 | `TOOL_PROMPT_MAX_MESSAGES` | No | `5` | 歷史比較設定；正常原生 transport 不使用。 |
 | `TOOL_DESCRIPTION_MAX_CHARS` | No | `160` | 歷史比較設定；正常原生 transport 不使用。 |
 | `TOOL_MESSAGE_MAX_CHARS` | No | `1200` | 歷史比較設定；正常原生 transport 不使用。 |
@@ -189,3 +192,5 @@ LOG_TO_FILE=false
 - [Development notes](docs/development-notes.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [English README](README.md)
+
+模型輸出上限與本次可靠性驗證：[模型上限表](docs/model-limits-2026-09-20.md)、[改造及實測紀錄](docs/reliability-2026-09-20.md)。

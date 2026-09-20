@@ -39,6 +39,9 @@ class AdapterSettings(BaseModel):
     auth_request_timeout_seconds: float = 20
     merlin_request_timeout_seconds: float = 45
     tool_call_mode: Literal["native", "emulated"] = "native"
+    completion_timeout_seconds: float = Field(default=600, ge=1, le=3600, allow_inf_nan=False)
+    completion_max_bytes: int = Field(default=16_777_216, ge=1024)
+    emulated_correction_attempts: int = Field(default=1, ge=0, le=1)
     tool_prompt_max_messages: int = 5
     tool_description_max_chars: int = 160
     tool_message_max_chars: int = 1200
@@ -105,6 +108,9 @@ SETTINGS = AdapterSettings.model_validate(
         "merlin_origin": _env("MERLIN_ORIGIN", AdapterSettings.model_fields["merlin_origin"].default),
         "adapter_api_key": _env("ADAPTER_API_KEY", AdapterSettings.model_fields["adapter_api_key"].default),
         "tool_call_mode": _env("TOOL_CALL_MODE", AdapterSettings.model_fields["tool_call_mode"].default),
+        "completion_timeout_seconds": _env("COMPLETION_TIMEOUT_SECONDS", 600),
+        "completion_max_bytes": _env("COMPLETION_MAX_BYTES", 16_777_216),
+        "emulated_correction_attempts": _env("EMULATED_CORRECTION_ATTEMPTS", 1),
         "log_level_name": _env("LOG_LEVEL", AdapterSettings.model_fields["log_level_name"].default),
         "log_to_file": _env("LOG_TO_FILE", AdapterSettings.model_fields["log_to_file"].default),
         "auth_request_timeout_seconds": _env(

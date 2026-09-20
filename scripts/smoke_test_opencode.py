@@ -22,6 +22,7 @@ import uvicorn  # noqa: E402
 from merlinai_adapter_server.app import app  # noqa: E402
 from merlinai_adapter_server.config import ADAPTER_API_KEY  # noqa: E402
 from merlinai_adapter_server.merlin_client import merlin_openai_client  # noqa: E402
+from merlinai_adapter_server.models_catalog import MODEL_LIMITS  # noqa: E402
 
 
 class RequestAudit:
@@ -46,6 +47,7 @@ class RequestAudit:
             if event["type"] == "http.request" and not event.get("more_body"):
                 body = json.loads(request_body)
                 record.update(model=body.get("model"), stream=body.get("stream"),
+                              max_tokens=body.get("max_tokens"),
                               tool_choice=body.get("tool_choice"),
                               tools=[t.get("function", {}).get("name") for t in body.get("tools", [])],
                               roles=[m.get("role") for m in body.get("messages", [])])
@@ -197,7 +199,7 @@ def main():
             "snapshot": False, "enabled_providers": ["merlinai-dev"],
             "provider": {"merlinai-dev": {"npm": "@ai-sdk/openai-compatible",
                          "options": {"baseURL": base_url, "apiKey": ADAPTER_API_KEY},
-                         "models": {m: {"name": m, "limit": {"context": 32000, "output": 1000}}
+                         "models": {m: {"name": m, "limit": {**MODEL_LIMITS[m].model_dump(exclude_none=True)}}
                                     for m in args.models}}},
             "agent": {"adapter-chat": chat_agent, "adapter-read": read_agent,
                       "title": {"disable": True}, "summary": {"disable": True}},
@@ -205,6 +207,7 @@ def main():
             "small_model": f"merlinai-dev/{args.models[0]}",
         }
         env = os.environ.copy()
+        env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(max(MODEL_LIMITS[m].output for m in args.models))
         env["OPENCODE_CONFIG"] = str(args.config.resolve())
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config)
         for model in args.models:

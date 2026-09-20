@@ -94,7 +94,9 @@ def normalize_native_tool_calls(
         if not isinstance(name, str) or not name.strip():
             raise HTTPException(502, "Merlin native tool call is missing function name")
         if name not in (allowed_tool_names or set()):
-            raise HTTPException(502, f"Merlin returned undeclared tool call: {name}")
+            # Malformed upstream names can contain entire generated files or
+            # reasoning. Never echo that unbounded payload as an API error.
+            raise HTTPException(502, "Merlin returned an undeclared native tool call")
 
         arguments = function.get("arguments")
         if isinstance(arguments, dict):

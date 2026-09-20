@@ -215,9 +215,17 @@ When `LOG_LEVEL=DEBUG`, the main logs include:
 - `outgoing_openai_response`
 - `streamed_openai_response_summary`
 
-Each debug payload includes the same `request_id`. The extension transport
-does not perform prompt JSON repair, hidden retries, or agentic retries; a
-failed upstream response is surfaced so callers can decide whether to retry.
+Each debug payload includes the same `request_id`. Native transport errors are not
+retried. Emulated responses share one atomic validation/correction path for both
+HTTP modes: `emulated_recovery.py` permits at most one protocol regeneration within
+the remaining output budget. It never executes tools or repairs JSON locally.
+`response_usage.py` accounts for both attempts and optional reasoning counters.
+
+`request_budget.py` owns a shared deadline, response-size limit and cancellation
+signal. The ASGI streaming wrapper interrupts the blocking upstream read on client
+disconnect. Standard completion processing retains per-event length/count summaries,
+not raw reasoning events and duplicate SSE strings. Debug request/response payloads
+can still contain caller data; only enable DEBUG deliberately.
 
 ## Related Docs
 

@@ -187,6 +187,24 @@ closing text marker only after a complete JSON value at EOF. Malformed JSON stil
 fails; `emulated_response_invalid` logs report lengths and token counts without
 including prompt or tool contents.
 
+In emulated `auto` mode, plain nonempty final text is now accepted after upstream
+DONE; it never becomes a tool call. Suspected JSON/tool payloads still require the
+validated protocol. Required/named choices do not permit this plain-text fallback.
+If an error reports `output token budget exhausted`, inspect `max_tokens`,
+`output_tokens`, and `reasoning_tokens`: the model may have consumed its budget
+without producing a complete answer. This differs from a missing marker around a
+valid reply. Missing usage is not treated as evidence of budget exhaustion.
+
+For GLM 5.3, see the [2026-09-20 reasoning research](glm53-reasoning-research-2026-09-20.md).
+Ten unchanged-prompt OpenCode experiments did not complete the scene task.
+Shorter per-turn instructions reduced reasoning in some turns but did not provide
+a reliable fix; experimental protocol changes were withdrawn.
+
+`Unsupported reasoning controls` (422) means the request contains a non-null
+`reasoning_effort`, `thinking`, or `reasoning` setting that the extension transport
+cannot confirm it supports. Remove the unsupported setting instead of assuming it
+was applied. This check does not change the prompt or automatically change budgets.
+
 - [API reference](api-reference.md)
 - [Architecture flow](architecture-flow.md)
 - [Development notes](development-notes.md)
