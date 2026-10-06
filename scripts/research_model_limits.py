@@ -15,6 +15,10 @@ from merlinai_adapter_server.models_catalog import SUPPORTED_MODELS
 def source_model(model):
     providers = {"claude-": "anthropic", "deepseek-": "deepseek", "gemini-": "google",
                  "glm-": "zai", "gpt-": "openai", "grok-": "xai", "kimi-": "moonshotai"}
+    if model == "claude-opus-5.5":
+        return "anthropic", "claude-opus-5-5"
+    if model == "claude-sonnet-5.5":
+        return "anthropic", "claude-sonnet-5-5"
     if model == "minimax-m3":
         return "minimax", "MiniMax-M3"
     if model == "qwen-3.8-max":

@@ -31,7 +31,7 @@ Authorization: Bearer <ADAPTER_API_KEY>
 | `stream` | `boolean` | No | Defaults to `false`. |
 | `tools` | `array` | No | Caller function schemas: forwarded in native mode, encoded in a prompt in emulated mode. No official extension tools are added. |
 | `tool_choice` | `string` or `object` | No | `auto`/omitted/`null` permits tools; `none` disables them. `required` and a named function are supported in emulated mode only; invalid requests return `422`. |
-| `max_tokens` | `integer` | No | Positive output limit sent as `params.max_tokens`. Omitted/null uses the configured model ceiling; compatible explicit smaller values are preserved (Qwen below 16385 uses its model default), values above that ceiling return `422` before network I/O. Unknown models retain a `10000` default. See [model limits](model-limits-2026-09-20.md). |
+| `max_tokens` | `integer` | No | Positive output limit sent as `params.max_tokens`. Omitted/null uses the configured model ceiling; compatible explicit smaller values are preserved (Qwen below 16385 uses its model default), values above that ceiling return `422` before network I/O. Unknown models retain a `10000` default. See [model limits](model-limits-2026-10-03.md). |
 | `stream_options` | `object` | No | Supports `include_usage`; usage is emitted in the final stream chunk when enabled. |
 
 ### Message shape
@@ -225,7 +225,9 @@ curl http://localhost:8000/v1/models \
 Published model IDs:
 
 - `claude-opus-5`
+- `claude-opus-5.5`
 - `claude-sonnet-5`
+- `claude-sonnet-5.5`
 - `deepseek-v4-flash`
 - `deepseek-v4-pro`
 - `gemini-3.1-flash-lite`
@@ -237,12 +239,16 @@ Published model IDs:
 - `gpt-5.6-sol`
 - `gpt-5.6-terra`
 - `gpt-6-astra`
+- `gpt-6-luna`
+- `gpt-6-sol`
+- `gpt-6.1-sol`
 - `grok-4.6`
+- `grok-4.7`
 - `kimi-k3`
 - `minimax-m3`
 - `qwen-3.8-max`
 
-Model list verified on 2026-09-17 against [Merlin's official configuration](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json). Only active text models (`textLLMs` with `archived=false`) are published.
+Model list verified on 2026-10-03 against [Merlin's official configuration](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json): 23 active text models (`textLLMs` with `archived=false`) are published.
 
 ## Error Behavior
 

@@ -14,14 +14,14 @@ from test_emulated_tools import TOOL, call, envelope, upstream
 
 class ModelTokenLimitsTests(unittest.TestCase):
     def test_all_catalog_limits_match_reviewed_snapshot(self):
-        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-09-20.json"
+        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-03.json"
         expected = {row["adapter_model"]: row["limit"]["output"]
                     for row in json.loads(snapshot.read_text(encoding="utf-8"))["models"]}
         self.assertEqual(MODEL_MAX_OUTPUT_TOKENS, expected)
         self.assertEqual(set(SUPPORTED_MODELS), set(expected))
 
     def test_models_endpoint_publishes_exact_context_input_output_capacities(self):
-        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-09-20.json"
+        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-03.json"
         expected = {row["adapter_model"]: row["limit"]
                     for row in json.loads(snapshot.read_text(encoding="utf-8"))["models"]}
         with patch("merlinai_adapter_server.security.ADAPTER_API_KEY", "test-key"), TestClient(app) as client:

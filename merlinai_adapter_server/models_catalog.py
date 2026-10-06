@@ -3,15 +3,17 @@ from typing import Any, Dict
 
 from .schemas import ModelLimits, OpenAIModel, OpenAIModelsResponse
 
-# Active textLLMs (archived=false), verified 2026-09-17 against Merlin's
+# Active textLLMs (archived=false), verified 2026-10-03 against Merlin's
 # https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json
-# Configured capacities from the first-party models.dev snapshot (2026-09-20).
+# Configured capacities from first-party provider records in models.dev (2026-10-03).
 # These are adapter metadata/policy, not verified Merlin transport capabilities.
 MODEL_LIMITS = {
     'claude-opus-5': ModelLimits(context=1_000_000, output=128_000),
+    'claude-opus-5.5': ModelLimits(context=1_000_000, output=128_000),
     'claude-sonnet-5': ModelLimits(context=1_000_000, output=128_000),
-    'deepseek-v4-flash': ModelLimits(context=1_000_000, output=384_000),
-    'deepseek-v4-pro': ModelLimits(context=1_000_000, output=384_000),
+    'claude-sonnet-5.5': ModelLimits(context=1_000_000, output=128_000),
+    'deepseek-v4-flash': ModelLimits(context=1_000_000, output=393_216),
+    'deepseek-v4-pro': ModelLimits(context=1_000_000, output=393_216),
     'gemini-3.1-flash-lite': ModelLimits(context=1_048_576, output=65_536),
     'gemini-3.8-flash': ModelLimits(context=1_048_576, output=65_536),
     'glm-5.3': ModelLimits(context=1_000_000, output=131_072),
@@ -21,9 +23,13 @@ MODEL_LIMITS = {
     'gpt-5.6-sol': ModelLimits(context=1_050_000, input=922_000, output=128_000),
     'gpt-5.6-terra': ModelLimits(context=1_050_000, input=922_000, output=128_000),
     'gpt-6-astra': ModelLimits(context=1_050_000, input=922_000, output=128_000),
+    'gpt-6-luna': ModelLimits(context=1_050_000, input=922_000, output=128_000),
+    'gpt-6-sol': ModelLimits(context=1_050_000, input=922_000, output=128_000),
+    'gpt-6.1-sol': ModelLimits(context=1_050_000, input=922_000, output=128_000),
     'grok-4.6': ModelLimits(context=500_000, output=500_000),
-    'kimi-k3': ModelLimits(context=1_048_576, output=131_072),
-    'minimax-m3': ModelLimits(context=1_048_576, output=512_000),
+    'grok-4.7': ModelLimits(context=500_000, output=500_000),
+    'kimi-k3': ModelLimits(context=1_048_576, output=1_048_576),
+    'minimax-m3': ModelLimits(context=1_000_000, output=512_000),
     'qwen-3.8-max': ModelLimits(context=1_000_000, output=131_072),
 }
 MODEL_MAX_OUTPUT_TOKENS = {model: limits.output for model, limits in MODEL_LIMITS.items()}

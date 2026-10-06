@@ -117,7 +117,9 @@ docker compose down
 ## 支援模型
 
 - `claude-opus-5`
+- `claude-opus-5.5`
 - `claude-sonnet-5`
+- `claude-sonnet-5.5`
 - `deepseek-v4-flash`
 - `deepseek-v4-pro`
 - `gemini-3.1-flash-lite`
@@ -129,12 +131,16 @@ docker compose down
 - `gpt-5.6-sol`
 - `gpt-5.6-terra`
 - `gpt-6-astra`
+- `gpt-6-luna`
+- `gpt-6-sol`
+- `gpt-6.1-sol`
 - `grok-4.6`
+- `grok-4.7`
 - `kimi-k3`
 - `minimax-m3`
 - `qwen-3.8-max`
 
-模型清單於 2026-09-17 核對 [Merlin 官方設定](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json)，僅公布未封存的文字模型（`textLLMs` 中 `archived=false`）。
+模型清單於 2026-10-03 核對 [Merlin 官方設定](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json)，共 23 個模型，僅公布未封存的文字模型（`textLLMs` 中 `archived=false`）。
 
 ## 環境設定
 
@@ -193,4 +199,4 @@ LOG_TO_FILE=false
 - [Troubleshooting](docs/troubleshooting.md)
 - [English README](README.md)
 
-模型輸出上限與本次可靠性驗證：[模型上限表](docs/model-limits-2026-09-20.md)、[改造及實測紀錄](docs/reliability-2026-09-20.md)。
+模型輸出上限與驗證：[模型上限表](docs/model-limits-2026-10-03.md)、[模型更新及實測紀錄](docs/model-validation-2026-10-03.md)、[可靠性改造及實測紀錄](docs/reliability-2026-09-20.md)。
