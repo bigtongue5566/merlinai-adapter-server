@@ -15,7 +15,8 @@ from .config import MERLIN_API_URL, MERLIN_ORIGIN, MERLIN_PATH, MERLIN_REQUEST_T
 from .emulated_tools import (
     EmulatedToolPolicy, build_emulated_messages, parse_emulated_response, resolve_emulated_tool_policy,
 )
-from .emulated_recovery import RecoveryPolicy
+from .emulated_recovery import EmulatedProtocolError, RecoveryPolicy
+from .emulated_continuation import ContinuationPolicy, incomplete_json_prefix
 from .request_budget import ManagedStream, RequestBudget, active_deadline
 from .response_usage import sum_usage, token_counts
 from .logging_config import log_debug_payload, logger
@@ -277,6 +278,9 @@ class MerlinOpenAIClient:
         self.tool_call_mode = tool_call_mode
         self.recovery_policy = RecoveryPolicy(
             enabled=bool(SETTINGS.emulated_correction_attempts),
+        )
+        self.continuation_policy = ContinuationPolicy(
+            max_attempts=SETTINGS.emulated_continuation_attempts,
         )
 
     def execute_chat_completion(
@@ -562,6 +566,17 @@ class MerlinOpenAIClient:
                 return MerlinResponseEnvelope(content=content, tool_calls=calls, raw_events=summaries,
                                               raw_chunks=[], usage=sum_usage(attempts))
             except HTTPException as exc:
+                total_usage = sum_usage(attempts)
+                # Reporting totals may fill missing values with zero. A retry
+                # must instead know every attempt's output before granting more.
+                known_output = all("output" in token_counts(usage) for usage in attempts)
+                if (known_output
+                        and self.continuation_policy.eligible(payload, response.content, total_usage, exc)):
+                    return self._continue_emulated(
+                        response.model_copy(update={"usage": total_usage, "raw_events": summaries}),
+                        context.model_copy(update={"max_tokens": payload["params"]["max_tokens"]}),
+                        payload, budget,
+                    )
                 correction = (self.recovery_policy.correction_payload(payload, response.content, response.usage, exc)
                               if attempt == 0 else None)
                 if correction is None:
@@ -576,6 +591,60 @@ class MerlinOpenAIClient:
                 attempts.append(response.usage)
                 summaries.extend(response.raw_events)
         raise AssertionError("unreachable")
+
+    def _continue_emulated(
+        self, response: MerlinResponseEnvelope, context: ChatCompletionContext,
+        payload: Dict[str, Any], budget: RequestBudget,
+    ) -> MerlinResponseEnvelope:
+        """Append model-authored suffixes atomically, within the original budget."""
+        content = response.content
+        attempts, summaries = [response.usage], list(response.raw_events)
+        rejected, rejected_error, rejected_count = None, None, 0
+        for number in range(self.continuation_policy.max_attempts):
+            continuation = self.continuation_policy.build_payload(
+                payload, content, sum_usage(attempts), context.emulation_policy,
+                rejected=rejected, error=rejected_error,
+            )
+            if continuation is None:
+                raise EmulatedProtocolError("continuation_limit", "Cannot continue the incomplete tool response within its remaining limits")
+            budget.remaining()
+            logger.info("emulated_response_continuation model={} attempt={} prefix_chars={} max_tokens={}",
+                        context.model, number + 1, len(content), continuation["params"]["max_tokens"])
+            set_attempt_context("protocol_continuation")
+            fragment = self._read_response(continuation, context, budget)
+            counts = token_counts(fragment.usage)
+            if "output" not in counts:
+                raise EmulatedProtocolError("continuation_usage", "Merlin continuation omitted output token usage; no tool calls were released")
+            if counts["output"] > continuation["params"]["max_tokens"]:
+                raise EmulatedProtocolError("continuation_budget", "Merlin continuation exceeded its remaining output budget; no tool calls were released")
+            attempts.append(fragment.usage)
+            summaries.extend(fragment.raw_events)
+            if not fragment.content.strip():
+                raise EmulatedProtocolError("continuation_empty", "Merlin continuation returned no suffix; no tool calls were released")
+            candidate = content + fragment.content
+            if len(candidate) > self.continuation_policy.max_content_chars:
+                raise EmulatedProtocolError("continuation_size", "Merlin continuation exceeded its text limit; no tool calls were released")
+            try:
+                answer, calls = self._parse_emulated_response(candidate, context, sum_usage(attempts))
+                return MerlinResponseEnvelope(content=answer, tool_calls=calls, raw_events=summaries,
+                                              raw_chunks=[], usage=sum_usage(attempts))
+            except HTTPException as exc:
+                if (isinstance(exc, EmulatedProtocolError) and exc.code == "json"
+                        and incomplete_json_prefix(candidate) is not None):
+                    content = candidate
+                    rejected, rejected_error = None, None
+                    rejected_count = 0
+                elif (isinstance(exc, EmulatedProtocolError) and exc.recoverable
+                      and rejected_count < self.continuation_policy.max_rejected_fragments):
+                    # A malformed suffix is discarded as a whole. Ask the model
+                    # to replace it; never escape, strip, or guess its text.
+                    rejected_count += 1
+                    rejected, rejected_error = fragment.content, exc.detail
+                    logger.info("emulated_continuation_fragment_rejected model={} attempt={} code={}",
+                                context.model, number + 1, exc.code)
+                else:
+                    raise
+        raise EmulatedProtocolError("continuation_attempts", "Merlin continuation attempt limit reached before a complete response; no tool calls were released")
 
     def _send_request(
         self, request: OpenAIRequest, context: ChatCompletionContext, *, attempt: str,

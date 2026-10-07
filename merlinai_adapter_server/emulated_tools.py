@@ -24,6 +24,7 @@ class EmulatedToolPolicy:
     choice: str
     selected_name: str | None = None
     single_call: bool = False
+    require_envelope: bool = False
 
 
 def _local_schema_refs(value: Any) -> None:
@@ -84,7 +85,8 @@ def resolve_emulated_tool_policy(request: OpenAIRequest) -> EmulatedToolPolicy:
         raise HTTPException(422, "Required tool_choice needs at least one tool")
     if selected_name is not None and selected_name not in names:
         raise HTTPException(422, "Named tool_choice must refer to a declared tool")
-    return EmulatedToolPolicy(tools, names, choice, selected_name, request.model == "qwen-3.8-max")
+    return EmulatedToolPolicy(tools, names, choice, selected_name,
+                              request.model == "qwen-3.8-max", request.model == "grok-4.7")
 
 
 def _append_text(content: Any, text: str) -> Any:
@@ -218,7 +220,7 @@ def parse_emulated_response(
     if not content:
         raise EmulatedProtocolError("empty", "Merlin returned no answer text for the emulated tool response", recoverable=False)
     start = content.find(STRUCTURED_PAYLOAD_START)
-    if (start < 0 and policy.choice == "auto" and not output_limit_reached
+    if (start < 0 and policy.choice == "auto" and not policy.require_envelope and not output_limit_reached
             and not _looks_like_structured_response(content)):
         # Return text only. No extraction, inferred tool calls or JSON repair.
         return original_content, []

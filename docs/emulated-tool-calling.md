@@ -53,7 +53,7 @@ TOOL_CALL_MODE=emulated
 - 容許單一完整區塊前後有解說文字；區塊外文字不會變成工具或回答。
 - 若有開始標記、JSON 已完整結束且後面只有空白，容許省略結尾文字標記。
   不補 JSON 括號、不補字串、不修復參數。JSON 字串內的標記視為普通內容。
-- 拒絕截斷 JSON、結構化回覆缺少開始標記、重複 JSON key、多個區塊、非有限數字、混合回答與呼叫、
+- 未能完整續寫的截斷 JSON、結構化回覆缺少開始標記、重複 JSON key、多個區塊、非有限數字、混合回答與呼叫、
   空呼叫清單、未宣告名稱及不符合 `tool_choice` 的回覆。
 - 使用 `jsonschema` 驗證 arguments，包含 required、型別、enum、巢狀結構、
   additionalProperties 等條件；支援本地 `#/$defs/...` 引用，禁止遠端 schema
@@ -62,6 +62,17 @@ TOOL_CALL_MODE=emulated
   格式／schema 錯誤可交回模型更正一次；更正仍須通過完整驗證，並共享原始輸出預算與時限。
   未宣告工具、tool_choice 違反、多個區塊、上游錯誤、空白回應不進行更正。
 - 回應不合法時非串流回 502；串流送 error，沒有成功 finish 或 `[DONE]`。
+
+Qwen 3.8 Max 的上游有時在工具 JSON 中途送出 DONE。對仍可由追加文字完成的
+JSON 前綴，adapter 保留原對話、工具 schema 與已收到的文字，另請模型續寫缺少的
+後綴。續寫時只改 adapter 自己的兩段輸出指示，避免完整 envelope 規則與後綴規則
+衝突。每個模型產生的片段必須是正常 DONE 的完整上游回應；adapter 原字拼接，
+直到整份 JSON、工具名稱、schema 和 tool_choice 全部通過，才釋出呼叫。
+
+不會補括號、修正跳脫或猜測檔案內容。新片段若引入錯誤 JSON，整片丟棄，請模型
+重寫一次；有效進展後下一片可再獲一次重寫機會，但所有請求都計入續寫次數上限。
+未宣告工具、tool_choice 違反、多個 envelope、傳輸失敗、空片段及缺少 output usage
+直接失敗。普通無工具對話不啟用自動續寫，因為正常 DONE 的純文字未必能辨識是否截斷。
 
 收到合法呼叫後，adapter 建立唯一 call ID。呼叫端執行工具，再送回 assistant
 工具呼叫歷史及 `role=tool` 結果。下一輪將工具呼叫改成 assistant 文字紀錄，
@@ -82,8 +93,8 @@ TOOL_CALL_MODE=emulated
 或最終文字 chunk、finish、可選 usage 與 `[DONE]`。因此工具回合的內容不是
 逐 token 即時顯示；截斷或後續出錯的 JSON 不會提前變成可執行呼叫。
 
-usage 包含模擬協定文字產生的 token；更正成功時合計兩次請求。上游有提供推理計數時，
-另輸出 `completion_tokens_details.reasoning_tokens`；兩次更正計數必須都存在才合計此欄位。
+usage 包含模擬協定文字產生的 token；更正／續寫成功時合計全部請求，包括被丟棄的片段。
+上游有提供推理計數時，另輸出 `completion_tokens_details.reasoning_tokens`；每次計數必須都存在才合計此欄位。
 推理已包含於 completion_tokens，不能再加一次。這些計數不能當作已核對的帳單。
 格式驗證失敗會記錄 model、文字長度、是否有標記、max_tokens、output_tokens 與
 reasoning_tokens、錯誤種類；這項 warning 不包含提示詞、檔案內容或工具結果。
@@ -97,6 +108,10 @@ budget 診斷依上游 usage 判斷，並不代表 adapter 能控制 Merlin 的�
 
 `EMULATED_CORRECTION_ATTEMPTS=0` 可停用更正，預設 1。更正最多使用
 原請求剩餘輸出預算，沒有另一個固定上限；低於 256 不更正。Qwen 剩餘預算須至少 16385。
+`EMULATED_CONTINUATION_ATTEMPTS=8` 控制 Qwen 續寫請求數，範圍 0–16；0 停用。
+兩個選項都設 0 可停用全部協定恢復。續寫也使用原請求的剩餘 output 預算、共同時限
+和共同 SSE 資料量上限；合併文字最多 65536 字元。每片約 300 答案 tokens 只是內部
+指示的目標，不會取代模型自己的 max_tokens 設定。候選片段尚未驗證時不會執行工具。
 拒絕回應超過 65536 字元時不重送內容。`COMPLETION_TIMEOUT_SECONDS=600` 限制整個請求，
 `COMPLETION_MAX_BYTES=16777216` 限制已解析 SSE 資料量；串流斷線會中止上游讀取。
 
