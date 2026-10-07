@@ -22,6 +22,42 @@ from test_emulated_tools import TOOL, call, envelope, event, upstream
 
 
 class CompletionRecoveryTests(unittest.TestCase):
+    def test_grok_unframed_preamble_is_corrected_before_release(self):
+        for stream in (False, True):
+            response = self.post([
+                upstream("I will inspect the workspace first.", usage={"tokens": {"output": 25}}),
+                upstream(envelope(call())),
+            ], model="grok-4.7", stream=stream, stream_options={"include_usage": True})
+            calls, _ = self.success(response, stream)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(self.payloads[1]["params"]["max_tokens"], 499975)
+            self.assertNotIn("I will inspect", response.text)
+
+    def test_grok_repeated_unframed_reply_fails_instead_of_success(self):
+        for stream in (False, True):
+            response = self.post([
+                upstream("I will inspect first.", usage={"tokens": {"output": 25}}),
+                upstream("I will inspect first."),
+            ], model="grok-4.7", stream=stream)
+            self.failure(response, stream)
+            self.assertEqual(len(self.payloads), 2)
+
+    def test_grok_framed_answer_and_plain_chat_still_work(self):
+        for stream in (False, True):
+            for tools, content in (([], "15"), ([TOOL], envelope({"type": "message", "content": "15"}))):
+                response = self.post([upstream(content)], model="grok-4.7", tools=tools, stream=stream)
+                self.assertEqual(response.status_code, 200)
+                if stream:
+                    chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                              if line.startswith("data: ") and "[DONE]" not in line]
+                    answer = "".join(choice["delta"].get("content", "")
+                                     for chunk in chunks for choice in chunk["choices"])
+                else:
+                    answer = response.json()["choices"][0]["message"]["content"]
+                self.assertEqual(answer, "15")
+                self.assertNotIn('"tool_calls": [', response.text)
+                self.assertEqual(len(self.payloads), 1)
+
     def setUp(self):
         for patcher in (
             patch.object(merlin_openai_client, "tool_call_mode", "emulated"),

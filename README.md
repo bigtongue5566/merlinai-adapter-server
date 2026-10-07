@@ -159,9 +159,10 @@ Model list verified on 2026-10-03 against [Merlin's official configuration](http
 | `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Timeout for Firebase sign-in and refresh requests. |
 | `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Timeout for Merlin upstream requests. |
 | `TOOL_CALL_MODE` | No | `native` | `native` forwards tools; `emulated` validates tool JSON over text chat. Restart after changing. |
-| `COMPLETION_TIMEOUT_SECONDS` | No | `600` | Overall completion deadline, including correction; separate from socket inactivity timeout. |
-| `COMPLETION_MAX_BYTES` | No | `16777216` | Maximum parsed SSE data bytes per completion, including correction. |
+| `COMPLETION_TIMEOUT_SECONDS` | No | `600` | Overall completion deadline, including correction and continuation; separate from socket inactivity timeout. |
+| `COMPLETION_MAX_BYTES` | No | `16777216` | Maximum parsed SSE data bytes per completion, including correction and continuation. |
 | `EMULATED_CORRECTION_ATTEMPTS` | No | `1` | One bounded protocol regeneration, or `0` to disable. Never retries transport failures. |
+| `EMULATED_CONTINUATION_ATTEMPTS` | No | `8` | Qwen emulated tools: up to 8 suffix requests for truncated JSON; `0` disables, maximum 16. Shares the original limits. |
 | `TOOL_PROMPT_MAX_MESSAGES` | No | `5` | Legacy comparison setting; unused by the normal native transport. |
 | `TOOL_DESCRIPTION_MAX_CHARS` | No | `160` | Legacy comparison setting; unused by the normal native transport. |
 | `TOOL_MESSAGE_MAX_CHARS` | No | `1200` | Legacy comparison setting; unused by the normal native transport. |

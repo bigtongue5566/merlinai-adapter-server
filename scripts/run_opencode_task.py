@@ -42,12 +42,15 @@ if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}', args.tag):
     parser.error('--tag must be a short alphanumeric identifier, not a path')
 if args.timeout <= 0 or args.context_tokens <= 0 or (args.max_output_tokens is not None and args.max_output_tokens <= 0):
     parser.error('Timeout and token limits must be positive')
-if args.max_output_tokens and args.max_output_tokens >= args.context_tokens:
-    parser.error('Output allowance must leave context room for input')
+if args.max_output_tokens > args.context_tokens:
+    parser.error('Output allowance cannot exceed context capacity')
 if not args.prompt_file.is_file():
     parser.error('--prompt-file must exist')
 if not shutil.which('opencode'):
     parser.error('OpenCode executable was not found')
+version = subprocess.run([shutil.which('opencode'), '--version'], capture_output=True,
+                         text=True, check=True, timeout=15).stdout.strip()
+v2 = bool(re.search(r'(?:^|\s)v?2\.', version))
 run_dir=ROOT/'logs'/('opencode-scene-e2e-'+args.tag)
 run_dir.mkdir(exist_ok=False)
 workdir=run_dir/'project'
@@ -112,8 +115,12 @@ config={
 if args.max_output_tokens:
     config['provider']['merlinai']['models']={args.model:{'limit':{'context':args.context_tokens,'output':args.max_output_tokens}}}
 env['OPENCODE_CONFIG_CONTENT']=json.dumps(config)
-command=[shutil.which('opencode'),'run','--pure','--format','json','--model','merlinai/'+args.model,
-         '--agent','build','--title',args.model+' rain scene full prompt '+args.tag,'--dir',str(workdir),prompt]
+command=[shutil.which('opencode'),'run','--standalone' if v2 else '--pure',
+         '--format','json','--model','merlinai/'+args.model,
+         '--agent','build','--title',args.model+' rain scene full prompt '+args.tag]
+if not v2:
+    command.extend(['--dir',str(workdir)])
+command.append(prompt)
 started=time.monotonic()
 timed_out=False
 process=None
