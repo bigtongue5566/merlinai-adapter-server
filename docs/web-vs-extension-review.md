@@ -2,6 +2,8 @@
 
 研究日期：2026-09-17。結合官方網頁前端、已安裝的 extension 8.2.3、使用者提供的 HAR，以及本次隔離連線測試。
 
+最新隔離比較見 [2026-10-28 Web／extension 實測](web-api-comparison-2026-10-28.md)。以下保留當時的研究與遷移背景。
+
 > 目前狀態：以下研究建議是在遷移前提出；依使用者後續決定，正式 adapter
 > 現在採用原生 extension chat transport，且不註冊 extension 內建工具。最新
 > 實作與驗證以 [extension API 評估](extension-api-migration-review.md) 為準。

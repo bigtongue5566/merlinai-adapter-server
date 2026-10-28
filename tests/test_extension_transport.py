@@ -27,7 +27,7 @@ class ExtensionTransportTests(unittest.TestCase):
             "merlinai_adapter_server.merlin_client.MERLIN_ORIGIN",
             "chrome-extension://test-extension-id",
         ), patch("merlinai_adapter_server.merlin_client.token_manager.get_access_token", return_value="test-token"):
-            headers = MerlinGateway()._get_headers()
+            headers = MerlinGateway(transport="extension")._get_headers()
         self.assertEqual(headers["x-merlin-version"], "test-extension-version")
         self.assertEqual(headers["origin"], "chrome-extension://test-extension-id")
         self.assertNotIn("referer", headers)
@@ -42,7 +42,7 @@ class ExtensionTransportTests(unittest.TestCase):
             ],
             max_tokens=123,
         )
-        payload = MerlinGateway().build_payload(
+        payload = MerlinGateway(transport="extension").build_payload(
             model=request.model,
             messages=[message.model_dump(exclude_none=True) for message in request.messages],
             tools=[],
@@ -55,7 +55,7 @@ class ExtensionTransportTests(unittest.TestCase):
 
     def test_client_converts_string_user_content_to_native_text_part(self):
         request = OpenAIRequest(model="gpt-5.6-luna", messages=[{"role": "user", "content": "hello"}])
-        payload = MerlinOpenAIClient(MerlinGateway())._build_merlin_payload(
+        payload = MerlinOpenAIClient(MerlinGateway(transport="extension"))._build_merlin_payload(
             request, ChatCompletionContext.from_request(request)
         )
         self.assertEqual(payload["messages"][0]["content"], [{"type": "text", "text": "hello"}])
@@ -80,7 +80,7 @@ class ExtensionTransportTests(unittest.TestCase):
             b"event: usage\ndata: {\"tokens\":{\"input\":1,\"output\":1}}\n\n"
             b"event: message\ndata: {\"data\":{\"eventType\":\"DONE\"}}\n\n"
         )
-        events = list(MerlinGateway().iter_event_stream(io.BytesIO(source), {"echo"}))
+        events = list(MerlinGateway(transport="extension").iter_event_stream(io.BytesIO(source), {"echo"}))
         self.assertEqual(events[0].content_delta, "hi")
         self.assertEqual(events[1].tool_calls[0]["function"]["name"], "echo")
         self.assertEqual(events[2].usage["tokens"]["input"], 1)

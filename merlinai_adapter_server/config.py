@@ -18,6 +18,7 @@ class AdapterSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     merlin_api_url: str = "www.getmerlin.in"
+    merlin_transport: Literal["web", "extension"] = "web"
     merlin_path: str = "/arcane/api/v2/extension/chat"
     merlin_origin: str = "chrome-extension://camppjleccjaphfdbohjdohecfnoikec"
     firebase_auth_host: str = "identitytoolkit.googleapis.com"
@@ -103,6 +104,7 @@ SETTINGS = AdapterSettings.model_validate(
     {
         "firebase_api_key": _env("MERLIN_FIREBASE_API_KEY", AdapterSettings.model_fields["firebase_api_key"].default),
         "merlin_email": _env("MERLIN_EMAIL"),
+        "merlin_transport": _env("MERLIN_TRANSPORT", "web"),
         "merlin_password": _env("MERLIN_PASSWORD"),
         "merlin_version": _env("MERLIN_VERSION", AdapterSettings.model_fields["merlin_version"].default),
         "merlin_path": _env("MERLIN_PATH", AdapterSettings.model_fields["merlin_path"].default),

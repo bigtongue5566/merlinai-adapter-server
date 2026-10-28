@@ -22,6 +22,7 @@ from .response_usage import sum_usage, token_counts
 from .logging_config import log_debug_payload, logger
 from .models_catalog import resolve_max_tokens
 from .merlin_sse import iter_merlin_sse
+from .merlin_web import WEB_PATH, WEB_ORIGIN, WEB_VERSION, build_web_payload, remove_truncation_notice
 from .native_protocol import normalize_native_tool_calls, resolve_native_tool_policy, validate_native_tool_choice
 from .openai_response_builder import build_native_openai_response, build_stream_chunk
 from .protocol_constants import STRUCTURED_PAYLOAD_END, STRUCTURED_PAYLOAD_START
@@ -37,10 +38,20 @@ class MerlinStreamEvent:
     raw_chunk: str
     usage: Optional[Dict[str, Any]] = None
     reasoning_delta: str = ""
+    finish_reason: Optional[str] = None
 
 
 class MerlinGateway:
     # Low-level Merlin transport: payload shaping, auth headers, HTTP call, and SSE parsing.
+    def __init__(self, transport: str | None = None):
+        self.transport = transport or SETTINGS.merlin_transport
+        if self.transport not in {"web", "extension"}:
+            raise ValueError("transport must be web or extension")
+
+    @property
+    def path(self):
+        return WEB_PATH if self.transport == "web" else MERLIN_PATH
+
     def build_payload(
         self,
         *,
@@ -126,12 +137,13 @@ class MerlinGateway:
             "merlin_request_start",
             {
                 "host": MERLIN_API_URL,
-                "path": MERLIN_PATH,
+                "path": self.path,
                 "timeout_seconds": MERLIN_REQUEST_TIMEOUT_SECONDS,
             },
         )
         try:
-            conn.request("POST", MERLIN_PATH, json.dumps(merlin_payload), headers)
+            wire_payload = build_web_payload(merlin_payload) if self.transport == "web" else merlin_payload
+            conn.request("POST", self.path, json.dumps(wire_payload), headers)
             res = conn.getresponse()
         except socket.timeout as exc:
             raise HTTPException(status_code=504, detail="Merlin request timed out") from exc
@@ -146,7 +158,7 @@ class MerlinGateway:
         return res
 
     def _get_headers(self) -> Dict[str, str]:
-        return {
+        headers = {
             "accept": "application/json, text/plain, */*",
             "authorization": f"Bearer {token_manager.get_access_token()}",
             "content-type": "application/json",
@@ -154,6 +166,11 @@ class MerlinGateway:
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
             "x-merlin-version": MERLIN_VERSION,
         }
+        if self.transport == "web":
+            headers.update({"origin": WEB_ORIGIN, "referer": WEB_ORIGIN + "/chat",
+                            "x-merlin-version": WEB_VERSION,
+                            "x-request-timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+        return headers
 
     def _read_event_stream(
         self,
@@ -181,8 +198,48 @@ class MerlinGateway:
         res: http.client.HTTPResponse,
         allowed_tool_names: Optional[Set[str]] = None,
     ) -> Iterator[MerlinStreamEvent]:
-        for event in iter_merlin_sse(res):
+        if self.transport == "web":
+            yield from self._web_event_stream(res, allowed_tool_names)
+        else:
+            yield from self._source_events(res, allowed_tool_names)
+
+    def _web_event_stream(self, response, allowed_tool_names):
+        pending, reason, usage = "", None, None
+        for event in self._source_events(response, allowed_tool_names):
+            # Charge every raw frame once while withholding only a footer-sized tail.
+            yield MerlinStreamEvent("", [], {}, event.raw_chunk, reasoning_delta=event.reasoning_delta)
+            if event.tool_calls:
+                raise HTTPException(502, "Unexpected native tool event on Web transport")
+            if event.finish_reason:
+                reason = event.finish_reason
+            if event.usage is not None:
+                usage = event.usage
+            pending += event.content_delta
+            if len(pending) > 256:
+                yield MerlinStreamEvent(pending[:-256], [], {}, "")
+                pending = pending[-256:]
+        if reason == "length":
+            pending = remove_truncation_notice(pending)
+        yield MerlinStreamEvent(pending, [], {}, "", finish_reason=reason)
+        if usage is not None:
+            yield MerlinStreamEvent("", [], {}, "", usage=usage)
+
+    def _source_events(self, response, allowed_tool_names):
+        for event in iter_merlin_sse(response):
+            if self.transport == "web" and event.name == "turnUsage":
+                counts = token_counts(event.data.get("totals") if isinstance(event.data, dict) else None)
+                if counts:
+                    yield MerlinStreamEvent("", [], {}, event.raw, usage={"tokens": counts})
+                continue
+            if self.transport == "web" and event.name == "finishReason":
+                reason = event.data.get("reason") if isinstance(event.data, dict) else None
+                yield MerlinStreamEvent("", [], {}, event.raw, finish_reason=reason)
+                continue
             if event.name == "usage":
+                if self.transport == "web":
+                    counts = token_counts(event.data)
+                    yield MerlinStreamEvent("", [], {}, event.raw, usage={"tokens": counts} if counts else None)
+                    continue
                 yield MerlinStreamEvent(
                     content_delta="",
                     tool_calls=[],
@@ -201,6 +258,8 @@ class MerlinGateway:
                 )
                 continue
             if event.name != "message" or not isinstance(event.data, dict):
+                if self.transport == "web":
+                    yield MerlinStreamEvent("", [], {}, event.raw)
                 continue
             value = event.data
             inner_data = value.get("data") if isinstance(value.get("data"), dict) else {}
@@ -258,6 +317,7 @@ class MerlinResponseEnvelope(BaseModel):
     raw_events: List[Dict[str, Any]]
     raw_chunks: List[str]
     usage: Optional[Dict[str, Any]] = None
+    finish_reason: str = "stop"
 
 
 class ChatCompletionResult(BaseModel):
@@ -283,19 +343,29 @@ class MerlinOpenAIClient:
             max_attempts=SETTINGS.emulated_continuation_attempts,
         )
 
+    def _context(self, request):
+        mode = "emulated" if self._gateway.transport == "web" else self.tool_call_mode
+        return ChatCompletionContext.from_request(request, mode)
+
+    def _check_web_budget(self, usage, context):
+        output = token_counts(usage).get("output")
+        if self._gateway.transport == "web" and output is not None and output > context.max_tokens:
+            raise HTTPException(502, "Merlin Web response exceeded the requested output token budget")
+
     def execute_chat_completion(
         self,
         request: OpenAIRequest,
     ) -> ChatCompletionResult:
         try:
-            context = ChatCompletionContext.from_request(request, self.tool_call_mode)
+            context = self._context(request)
             initial_response = self._send_request(request, context, attempt="initial")
             full_content = initial_response.content
             response_tool_calls = initial_response.tool_calls
             raw_events = initial_response.raw_events
 
             response_payload = build_native_openai_response(
-                request, full_content, response_tool_calls, initial_response.usage
+                request, full_content, response_tool_calls, initial_response.usage,
+                finish_reason=initial_response.finish_reason,
             )
             return ChatCompletionResult(
                 response_payload=response_payload,
@@ -318,7 +388,7 @@ class MerlinOpenAIClient:
 
         conn: http.client.HTTPSConnection | None = None
         try:
-            context = ChatCompletionContext.from_request(request, self.tool_call_mode)
+            context = self._context(request)
             merlin_payload = self._build_merlin_payload(request, context)
             budget = RequestBudget(SETTINGS.completion_timeout_seconds, SETTINGS.completion_max_bytes)
             with budget.opening():
@@ -367,6 +437,7 @@ class MerlinOpenAIClient:
         raw_events: List[Dict[str, Any]] = []
         raw_chunks: List[str] = []
         usage: Optional[Dict[str, Any]] = None
+        finish_reason = "stop"
         request_log_context = {"request_id": request_id} if request_id else {}
         attempt_log_context = {**request_log_context, "attempt": "initial"}
 
@@ -387,6 +458,8 @@ class MerlinOpenAIClient:
                 if stream_event.content_delta:
                     content_parts.append(stream_event.content_delta)
                 usage = stream_event.usage or usage
+                if stream_event.finish_reason == "length":
+                    finish_reason = "length"
 
                 if context.emulation_policy and context.tools:
                     # Never expose partial protocol JSON or executable calls before
@@ -424,6 +497,7 @@ class MerlinOpenAIClient:
 
             full_content = "".join(content_parts)
             content_parts.clear()
+            self._check_web_budget(usage, context)
             if context.emulation_policy and context.tools:
                 conn.close()
                 completed = self._resolve_emulated(
@@ -432,6 +506,7 @@ class MerlinOpenAIClient:
                     context, payload, budget,
                 )
                 full_content, response_tool_calls, usage = completed.content, completed.tool_calls, completed.usage
+                finish_reason = completed.finish_reason
                 raw_events = completed.raw_events
                 if response_tool_calls:
                     yield build_stream_chunk(
@@ -449,7 +524,7 @@ class MerlinOpenAIClient:
             log_debug_payload(
                 "merlin_raw_response",
                 {
-                    "transport": "extension",
+                    "transport": self._gateway.transport,
                     "event_count": len(raw_events),
                     "raw_event_chunks": raw_chunks,
                     "raw_events": raw_events,
@@ -461,7 +536,7 @@ class MerlinOpenAIClient:
             log_debug_payload(
                 "merlin_attempt_summary",
                 {
-                    "transport": "extension",
+                    "transport": self._gateway.transport,
                     "event_count": len(raw_events),
                     "assembled_content": full_content,
                     "tool_call_count": len(response_tool_calls),
@@ -473,7 +548,7 @@ class MerlinOpenAIClient:
                 "streamed_openai_response_summary",
                 {
                     "response_id": response_id,
-                    "finish_reason": "tool_calls" if response_tool_calls else "stop",
+                    "finish_reason": "tool_calls" if response_tool_calls else finish_reason,
                     "tool_call_names": [
                         tool_call.get("function", {}).get("name")
                         for tool_call in response_tool_calls
@@ -490,7 +565,7 @@ class MerlinOpenAIClient:
                 created=created,
                 model=request.model,
                 delta={},
-                finish_reason="tool_calls" if response_tool_calls else "stop",
+                finish_reason="tool_calls" if response_tool_calls else finish_reason,
             )
             if context.stream_options.get("include_usage") and usage is not None:
                 yield build_stream_chunk(
@@ -540,6 +615,7 @@ class MerlinOpenAIClient:
                 conn, res = self._gateway.open_request(payload)
             parts, calls, summaries = [], [], []
             usage = None
+            reason = "stop"
             names = set() if context.emulation_policy else context.allowed_tool_names
             for event in self._bounded_events(conn, res, names, budget):
                 parts.append(event.content_delta)
@@ -547,8 +623,11 @@ class MerlinOpenAIClient:
                 summaries.append(self._event_summary(event))
                 if event.usage is not None:
                     usage = event.usage
+                if event.finish_reason == "length":
+                    reason = "length"
+            self._check_web_budget(usage, context.model_copy(update={"max_tokens": payload["params"]["max_tokens"]}))
             return MerlinResponseEnvelope(content="".join(parts), tool_calls=calls,
-                                          raw_events=summaries, raw_chunks=[], usage=usage)
+                                          raw_events=summaries, raw_chunks=[], usage=usage, finish_reason=reason)
         finally:
             if conn is not None:
                 conn.close()
@@ -653,10 +732,11 @@ class MerlinOpenAIClient:
         payload = self._build_merlin_payload(request, context)
         budget = RequestBudget(SETTINGS.completion_timeout_seconds, SETTINGS.completion_max_bytes)
         response = self._read_response(payload, context, budget)
+        self._check_web_budget(response.usage, context)
         if context.emulation_policy and context.tools:
             response = self._resolve_emulated(response, context, payload, budget)
         log_debug_payload("merlin_attempt_summary", {
-            "transport": "extension", "event_count": len(response.raw_events),
+            "transport": self._gateway.transport, "event_count": len(response.raw_events),
             "content_chars": len(response.content), "tool_call_count": len(response.tool_calls),
             "usage": response.usage,
         })
@@ -726,8 +806,8 @@ class MerlinOpenAIClient:
         log_debug_payload(
             "outgoing_merlin_payload",
             {
-                "transport": "extension",
-                "tool_call_mode": self.tool_call_mode,
+                "transport": self._gateway.transport,
+                "tool_call_mode": "emulated" if context.emulation_policy else "native",
                 "payload": model_dump_compat(merlin_payload),
             },
         )
