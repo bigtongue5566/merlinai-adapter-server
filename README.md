@@ -117,31 +117,26 @@ For request and response examples, see [API reference](docs/api-reference.md).
 
 ## Supported Models
 
-- `claude-opus-5`
+- `claude-haiku-5.5`
 - `claude-opus-5.5`
-- `claude-sonnet-5`
 - `claude-sonnet-5.5`
 - `deepseek-v4-flash`
 - `deepseek-v4-pro`
 - `gemini-3.1-flash-lite`
 - `gemini-3.8-flash`
+- `gemini-4-argon`
 - `glm-5.3`
 - `glm-5.3-flash`
-- `gpt-5.5`
-- `gpt-5.6-luna`
-- `gpt-5.6-sol`
-- `gpt-5.6-terra`
 - `gpt-6-astra`
 - `gpt-6-luna`
 - `gpt-6-sol`
 - `gpt-6.1-sol`
-- `grok-4.6`
 - `grok-4.7`
 - `kimi-k3`
 - `minimax-m3`
 - `qwen-3.8-max`
 
-Model list verified on 2026-10-03 against [Merlin's official configuration](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json): 23 active text models (`textLLMs` with `archived=false`) are published.
+Model list verified on 2026-10-28 against [Merlin's official configuration](https://cdn.jsdelivr.net/gh/foyer-work/cdn-files@latest/merlin_constants.json): 18 active text models (`textLLMs` with `archived=false`) are published.
 
 ## Configuration
 
@@ -203,4 +198,4 @@ Useful helper:
 - [Troubleshooting](docs/troubleshooting.md)
 - [Traditional Chinese README](README.zh-TW.md)
 
-Model output limits and verification: [model limits](docs/model-limits-2026-10-03.md), [catalog update and live results](docs/model-validation-2026-10-03.md), [reliability implementation and live results](docs/reliability-2026-09-20.md).
+Model output limits and verification: [model limits](docs/model-limits-2026-10-28.md), [catalog update and live results](docs/model-validation-2026-10-28.md), [reliability implementation and live results](docs/reliability-2026-09-20.md).
