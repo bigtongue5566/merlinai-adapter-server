@@ -13,15 +13,20 @@ from test_emulated_tools import TOOL, call, envelope, upstream
 
 
 class ModelTokenLimitsTests(unittest.TestCase):
+    def test_published_models_match_active_merlin_snapshot(self):
+        snapshot = Path(__file__).resolve().parents[1] / "docs/model-catalog-2026-10-28.json"
+        expected = json.loads(snapshot.read_text(encoding="utf-8"))["active_models"]
+        self.assertEqual(list(SUPPORTED_MODELS), expected)
+
     def test_all_catalog_limits_match_reviewed_snapshot(self):
-        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-03.json"
+        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-28.json"
         expected = {row["adapter_model"]: row["limit"]["output"]
                     for row in json.loads(snapshot.read_text(encoding="utf-8"))["models"]}
         self.assertEqual(MODEL_MAX_OUTPUT_TOKENS, expected)
         self.assertEqual(set(SUPPORTED_MODELS), set(expected))
 
     def test_models_endpoint_publishes_exact_context_input_output_capacities(self):
-        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-03.json"
+        snapshot = Path(__file__).resolve().parents[1] / "docs/model-limits-2026-10-28.json"
         expected = {row["adapter_model"]: row["limit"]
                     for row in json.loads(snapshot.read_text(encoding="utf-8"))["models"]}
         with patch("merlinai_adapter_server.security.ADAPTER_API_KEY", "test-key"), TestClient(app) as client:
@@ -35,7 +40,7 @@ class ModelTokenLimitsTests(unittest.TestCase):
             if "input" in limits:
                 self.assertLessEqual(limits["input"], limits["context"])
         self.assertNotIn("input", actual["glm-5.3"])
-        self.assertEqual(actual["gpt-5.6-luna"]["input"], 922000)
+        self.assertEqual(actual["gpt-6-luna"]["input"], 922000)
 
     def test_model_defaults_and_explicit_limits_reach_transport_in_both_modes(self):
         for mode in ("native", "emulated"):

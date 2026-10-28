@@ -57,7 +57,7 @@ class EmulatedToolsTests(unittest.TestCase):
         self.connections = []
 
     def post(self, source, **fields):
-        body = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "Read fixture"}],
+        body = {"model": "gpt-6-luna", "messages": [{"role": "user", "content": "Read fixture"}],
                 "tools": [TOOL], **fields}
         def open_request(payload):
             self.payloads.append(payload)
