@@ -12,27 +12,26 @@
 
 - adapter API key 驗證
 - Merlin 登入與 token refresh
-- 原生 extension 訊息與 payload 轉送
+- Merlin Web 請求轉送，可選擇切回 extension transport
 - 上游即時串流與非串流回應
-- 結構化 extension SSE 解析與 OpenAI 回應轉換
+- 結構化 Merlin SSE 解析與 OpenAI 回應轉換
 
 ## 主要功能
 
 - 支援 OpenAI 相容的 `POST /v1/chat/completions`
 - 支援 OpenAI 相容的 `GET /v1/models`
-- 聊天請求支援 Merlin extension SSE 即時串流
+- 聊天請求支援 Merlin Web SSE 串流
 - 保留完整對話；原生模式保留 content parts，模擬模式將工具歷史轉成文字紀錄
 - 自動取得與刷新 Merlin bearer token
 - 透過 `Authorization: Bearer <ADAPTER_API_KEY>` 保護 adapter 入口
-- 明確切換 `native`／`emulated` 工具模式，不加入瀏覽器、MCP 或其他官方 extension 工具
+- Web 使用經驗證的模擬工具，extension 可選原生模式，不加入官方工具
 - 模擬呼叫必須通過完整 JSON 協定、工具名稱與參數 schema 驗證
 - 支援 request/response payload debug logging
 - 可用本機或 Docker 方式部署
 
-在 `.env` 設定 `TOOL_CALL_MODE=emulated` 並重啟，即可使用新版 extension
-傳輸搭配工具模擬。原生工具先前實測失敗；模擬模式已通過 Luna／Sonnet 的
-讀檔後回答完整回合。詳見[工具模式說明](docs/emulated-tool-calling.md)與
-[OpenCode 實測](docs/opencode-validation-2026-09-19.md)。
+預設使用 Web（`MERLIN_TRANSPORT=web`），工具一律走經完整驗證的文字相容層，
+完整對話會序列化後送往 Web API。設定 `MERLIN_TRANSPORT=extension` 可切回舊路徑。
+詳見 [Web transport 行為與限制](docs/web-transport.md)。
 
 ## 快速開始
 
@@ -145,14 +144,15 @@ docker compose down
 | `MERLIN_PASSWORD` | Yes | None | Merlin 登入密碼。 |
 | `ADAPTER_API_KEY` | No | `sk-123` | 進入 adapter 時要求的 `Authorization` API key。 |
 | `MERLIN_FIREBASE_API_KEY` | No | 內建預設值 | 用於 Merlin 登入的 Firebase Web API key。 |
-| `MERLIN_VERSION` | No | `merlin-extension-8.2.3` | 上游 `x-merlin-version` header 的值，已核對官方 extension 原始程式。 |
-| `MERLIN_PATH` | No | `/arcane/api/v2/extension/chat` | 原生 Merlin extension chat endpoint。 |
-| `MERLIN_ORIGIN` | No | `chrome-extension://camppjleccjaphfdbohjdohecfnoikec` | 官方 8.2.3 extension request 使用的 Origin。 |
+| `MERLIN_TRANSPORT` | No | `web` | Web 使用官方網頁 profile 與模擬工具；`extension` 可切回舊傳輸。 |
+| `MERLIN_VERSION` | No | `merlin-extension-8.2.3` | 僅 extension 使用此版本設定；Web 固定使用 `web-merlin`。 |
+| `MERLIN_PATH` | No | `/arcane/api/v2/extension/chat` | 僅 extension 使用；Web 為 `/arcane/api/v2/thread/unified`。 |
+| `MERLIN_ORIGIN` | No | `chrome-extension://camppjleccjaphfdbohjdohecfnoikec` | 僅 extension 使用；Web 為 `https://www.getmerlin.in`。 |
 | `LOG_LEVEL` | No | `INFO` | logger 層級。設為 `DEBUG` 可查看 payload trace。 |
 | `LOG_TO_FILE` | No | `true` | 開啟時會把 logs 寫入 `logs/adapter.log`。 |
 | `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Firebase 登入與 refresh request timeout。 |
 | `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Merlin upstream request timeout。 |
-| `TOOL_CALL_MODE` | No | `native` | `native` 直接轉送工具；`emulated` 使用文字協定並驗證工具 JSON。修改後重啟。 |
+| `TOOL_CALL_MODE` | No | `native` | 僅影響 extension；Web 一律使用 `emulated`，範例環境也明確選擇此模式。 |
 | `COMPLETION_TIMEOUT_SECONDS` | No | `600` | 整體請求時限，包含更正；不同於 socket 閒置逾時。 |
 | `COMPLETION_MAX_BYTES` | No | `16777216` | 每次完成請求的已解析 SSE 資料量上限，包含更正。 |
 | `EMULATED_CORRECTION_ATTEMPTS` | No | `1` | 最多一次協定更正；0 停用，不重試傳輸錯誤。 |
@@ -167,7 +167,7 @@ docker compose down
 `TOOL_*` prompt 壓縮設定仍保留給歷史比較與診斷輔助工具；正常的原生
 extension transport 會保留呼叫端的 messages 順序，不會攤平成單一 prompt。
 
-adapter 會設定 `metadata.isMCPEnabled=true`，因為 extension endpoint 即使
+選擇 extension 時，adapter 會設定 `metadata.isMCPEnabled=true`，因為該 endpoint 即使
 `params.tools` 為空也要求這個 session flag；這不會加入 extension 工具。
 已核對的 extension header、測試結果與協定範圍，請參考
 [Extension compatibility](docs/extension-compatibility.md)。修改 `MERLIN_VERSION` 後需重啟 adapter。

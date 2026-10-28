@@ -12,28 +12,27 @@ It handles:
 
 - adapter API key validation
 - Merlin login and token refresh
-- native extension message and payload forwarding
+- Merlin Web request forwarding, with an optional extension transport
 - live upstream streaming and non-streaming responses
-- structured extension SSE parsing and OpenAI response conversion
+- structured Merlin SSE parsing and OpenAI response conversion
 
 ## Key Features
 
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-compatible `GET /v1/models`
-- Live Merlin extension SSE streaming for chat requests
+- Merlin Web SSE streaming for chat requests
 - Full conversation history; native content parts and explicit tool-history encoding in emulated mode
 - Automatic Merlin bearer token acquisition and refresh
 - Adapter-level API key protection via `Authorization: Bearer <ADAPTER_API_KEY>`
-- Explicit `native` or `emulated` tool mode; no browser, MCP, or other official extension tools are added
+- Validated emulated tools on Web; optional extension native mode; no official tools are added
 - Emulated calls require complete protocol JSON, declared names, and valid schema arguments
 - Debug logging for request/response payload inspection
 - Local and Docker-based deployment options
 
-Use `TOOL_CALL_MODE=emulated` in `.env` and restart for prompt-based tool calling
-over the current extension endpoint. Native caller tools failed the earlier
-OpenCode check; emulated read-and-answer rounds now pass for Luna and Sonnet.
-See [tool mode behavior](docs/emulated-tool-calling.md) and
-[OpenCode validation](docs/opencode-validation-2026-09-19.md).
+Web is the default (`MERLIN_TRANSPORT=web`) and always uses validated emulated
+tools. It serializes the complete message history into the Web request. Set
+`MERLIN_TRANSPORT=extension` to restore the extension path. See
+[Web transport behavior and limits](docs/web-transport.md).
 
 ## Quick Start
 
@@ -146,14 +145,15 @@ Model list verified on 2026-10-28 against [Merlin's official configuration](http
 | `MERLIN_PASSWORD` | Yes | None | Merlin login password. |
 | `ADAPTER_API_KEY` | No | `sk-123` | API key expected in the incoming `Authorization` header. |
 | `MERLIN_FIREBASE_API_KEY` | No | Built-in value | Firebase Web API key used for Merlin sign-in. |
-| `MERLIN_VERSION` | No | `merlin-extension-8.2.3` | Value of the upstream `x-merlin-version` header; verified against the official extension source. |
-| `MERLIN_PATH` | No | `/arcane/api/v2/extension/chat` | Native Merlin extension chat endpoint. |
-| `MERLIN_ORIGIN` | No | `chrome-extension://camppjleccjaphfdbohjdohecfnoikec` | Origin used by the official 8.2.3 extension request. |
+| `MERLIN_TRANSPORT` | No | `web` | `web` uses the official Web profile and emulated tools; `extension` restores the legacy transport. |
+| `MERLIN_VERSION` | No | `merlin-extension-8.2.3` | Extension-only version header. Web uses `web-merlin`. |
+| `MERLIN_PATH` | No | `/arcane/api/v2/extension/chat` | Extension-only endpoint. Web uses `/arcane/api/v2/thread/unified`. |
+| `MERLIN_ORIGIN` | No | `chrome-extension://camppjleccjaphfdbohjdohecfnoikec` | Extension-only Origin. Web uses `https://www.getmerlin.in`. |
 | `LOG_LEVEL` | No | `INFO` | Logger level. Set to `DEBUG` for payload tracing. |
 | `LOG_TO_FILE` | No | `true` | Writes logs to `logs/adapter.log` when enabled. |
 | `AUTH_REQUEST_TIMEOUT_SECONDS` | No | `20` | Timeout for Firebase sign-in and refresh requests. |
 | `MERLIN_REQUEST_TIMEOUT_SECONDS` | No | `45` | Timeout for Merlin upstream requests. |
-| `TOOL_CALL_MODE` | No | `native` | `native` forwards tools; `emulated` validates tool JSON over text chat. Restart after changing. |
+| `TOOL_CALL_MODE` | No | `native` | Applies to extension. Web always uses `emulated`; the example environment selects it explicitly. |
 | `COMPLETION_TIMEOUT_SECONDS` | No | `600` | Overall completion deadline, including correction and continuation; separate from socket inactivity timeout. |
 | `COMPLETION_MAX_BYTES` | No | `16777216` | Maximum parsed SSE data bytes per completion, including correction and continuation. |
 | `EMULATED_CORRECTION_ATTEMPTS` | No | `1` | One bounded protocol regeneration, or `0` to disable. Never retries transport failures. |
@@ -170,7 +170,7 @@ The `TOOL_*` prompt-compaction settings are retained for historical comparison
 and diagnostic helpers. They are not used by the normal extension transport,
 which preserves the caller's message sequence.
 
-The adapter sends `metadata.isMCPEnabled=true` because the extension endpoint
+When extension is selected, the adapter sends `metadata.isMCPEnabled=true` because that endpoint
 requires that session flag even when `params.tools` is empty. It does not add
 extension tools. For the verified extension header, test results, and protocol scope, see
 [Extension compatibility](docs/extension-compatibility.md). Restart the adapter

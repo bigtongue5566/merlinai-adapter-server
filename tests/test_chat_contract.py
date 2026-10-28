@@ -48,6 +48,9 @@ class ChatContractTests(unittest.TestCase):
         configure_logger()
 
     def setUp(self):
+        transport_patch = patch.object(merlin_gateway, "transport", "extension")
+        transport_patch.start()
+        self.addCleanup(transport_patch.stop)
         mode_patch = patch.object(merlin_openai_client, "tool_call_mode", "native")
         mode_patch.start()
         self.addCleanup(mode_patch.stop)

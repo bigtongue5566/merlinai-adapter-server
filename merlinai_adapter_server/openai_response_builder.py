@@ -132,6 +132,7 @@ def build_native_openai_response(
     full_content: str,
     response_tool_calls: List[Dict[str, Any]],
     usage: Optional[Dict[str, Any]] = None,
+    *, finish_reason: str = "stop",
 ) -> Dict[str, Any]:
     """Build an OpenAI response from native extension events."""
     allowed_names = get_allowed_tool_names(request)
@@ -140,7 +141,8 @@ def build_native_openai_response(
         raise HTTPException(status_code=502, detail="Merlin returned tool calls without declared tools")
     if len(filtered_calls) != len(response_tool_calls):
         raise HTTPException(status_code=502, detail="Merlin returned an undeclared tool call")
-    response_message, finish_reason = _build_response_message(full_content, full_content or None, filtered_calls)
+    response_message, tool_finish_reason = _build_response_message(full_content, full_content or None, filtered_calls)
+    finish_reason = tool_finish_reason if filtered_calls else finish_reason
     response = OpenAIChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4()}",
         created=int(datetime.datetime.now().timestamp()),

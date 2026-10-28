@@ -18,7 +18,7 @@ TOOL = {
 
 class NativeProtocolTests(unittest.TestCase):
     def test_gemini_empty_tools_omitted_without_losing_real_tools(self):
-        gateway = MerlinGateway()
+        gateway = MerlinGateway(transport="extension")
         for supplied, choice, expected in (([], None, None), ([TOOL], "none", None), ([TOOL], None, [TOOL])):
             with self.subTest(choice=choice, supplied=supplied):
                 payload = gateway.build_payload(model="gemini-3.8-flash",
@@ -42,7 +42,7 @@ class NativeProtocolTests(unittest.TestCase):
         request = self.request(tools=[TOOL], tool_choice="none")
         policy = resolve_native_tool_policy(request)
         self.assertEqual(policy.tools, [])
-        payload = MerlinGateway().build_payload(
+        payload = MerlinGateway(transport="extension").build_payload(
             model=request.model,
             messages=[message.model_dump(exclude_none=True) for message in request.messages],
             tools=request.tools,
@@ -53,7 +53,7 @@ class NativeProtocolTests(unittest.TestCase):
     def test_required_named_and_invalid_choices_fail_before_network(self):
         for choice in ("required", "function:echo", "bogus", {"type": "function", "function": {"name": "echo"}}):
             request = self.request(tools=[TOOL], tool_choice=choice)
-            client = MerlinOpenAIClient(MerlinGateway())
+            client = MerlinOpenAIClient(MerlinGateway(transport="extension"))
             with patch.object(MerlinGateway, "open_request", side_effect=AssertionError("network opened")):
                 with self.assertRaises(HTTPException) as raised:
                     client.execute_chat_completion(request)
@@ -63,7 +63,7 @@ class NativeProtocolTests(unittest.TestCase):
         for stream in (False, True):
             for choice in ("required", "function:echo", {"type": "function", "function": {"name": "echo"}}):
                 request = self.request(tools=[TOOL], tool_choice=choice, stream=stream)
-                client = MerlinOpenAIClient(MerlinGateway())
+                client = MerlinOpenAIClient(MerlinGateway(transport="extension"))
                 with patch.object(MerlinGateway, "open_request", side_effect=AssertionError("network opened")):
                     if stream:
                         with self.assertRaises(HTTPException) as raised:
@@ -77,11 +77,11 @@ class NativeProtocolTests(unittest.TestCase):
 
     def test_legacy_gateway_payload_is_retired(self):
         with self.assertRaisesRegex(ValueError, "legacy user_message payload is retired"):
-            MerlinGateway().build_payload(model="gpt-5.6-luna", user_message="old")
+            MerlinGateway(transport="extension").build_payload(model="gpt-5.6-luna", user_message="old")
 
     def test_legacy_user_message_is_rejected_even_with_native_messages(self):
         with self.assertRaisesRegex(ValueError, "legacy user_message payload is retired"):
-            MerlinGateway().build_payload(
+            MerlinGateway(transport="extension").build_payload(
                 model="gpt-5.6-luna",
                 user_message="old",
                 messages=[{"role": "user", "content": "new"}],
@@ -107,7 +107,7 @@ class NativeProtocolTests(unittest.TestCase):
 
     def test_text_that_looks_like_json_is_preserved(self):
         source = b'event: message\ndata: {"data":{"type":"text","text":"{\\"function\\":{\\"name\\":\\"echo\\"}}"}}\n\nevent: message\ndata: {"data":{"eventType":"DONE"}}\n\n'
-        events = list(MerlinGateway().iter_event_stream(io.BytesIO(source), set()))
+        events = list(MerlinGateway(transport="extension").iter_event_stream(io.BytesIO(source), set()))
         self.assertIn('"function"', events[0].content_delta)
         self.assertEqual(events[0].tool_calls, [])
 
@@ -122,7 +122,7 @@ class NativeProtocolTests(unittest.TestCase):
     def test_embedded_malformed_tool_field_is_not_ignored(self):
         source = b'event: message\ndata: {"data":{"tool_calls":{}}}\n\nevent: message\ndata: {"data":{"eventType":"DONE"}}\n\n'
         with self.assertRaises(HTTPException) as raised:
-            list(MerlinGateway().iter_event_stream(io.BytesIO(source), {"echo"}))
+            list(MerlinGateway(transport="extension").iter_event_stream(io.BytesIO(source), {"echo"}))
         self.assertEqual(raised.exception.status_code, 502)
 
     def test_valid_json_argument_string_is_preserved_verbatim(self):
